@@ -167,6 +167,13 @@ export default function DoctorDashboard() {
             <Text style={styles.dateText}>{formatDateLong(new Date())}</Text>
           </View>
           <TouchableOpacity
+            testID="dash-edit-profile"
+            style={styles.headerEditBtn}
+            onPress={() => router.push('/doctor/profile')}
+          >
+            <Ionicons name="create-outline" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+          <TouchableOpacity
             testID="dash-logout"
             style={styles.logoutBtn}
             onPress={async () => { await logout(); router.replace('/auth/login'); }}
@@ -453,6 +460,7 @@ const styles = StyleSheet.create({
   name: { color: '#FFFFFF', fontSize: 20, fontWeight: '800' },
   dateText: { color: 'rgba(255,255,255,0.7)', fontSize: 12, marginTop: 2, textTransform: 'capitalize' as any },
   logoutBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.15)' },
+  headerEditBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.15)', marginRight: 8 },
 
   nextUp: { flexDirection: 'row', alignItems: 'center', padding: 18, borderRadius: 20, gap: 12 },
   nextUpLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },

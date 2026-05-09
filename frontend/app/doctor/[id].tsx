@@ -313,6 +313,8 @@ const styles = StyleSheet.create({
   bio: { fontSize: 14, lineHeight: 21 },
   langRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   langText: { fontSize: 13 },
+  hoursWrap: { marginTop: 14, padding: 12, borderRadius: 12, borderWidth: 1 },
+  hoursRow: { flexDirection: 'row', paddingVertical: 4 },
 
   studioCard: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, borderWidth: 1, marginBottom: 8, gap: 12 },
   studioRadio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },

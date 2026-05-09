@@ -710,9 +710,6 @@ async def doctor_bookings(current_user: User = Depends(get_current_user)):
 
 @api_router.get("/doctor/me")
 async def doctor_me(current_user: User = Depends(get_current_user)):
-    """Return the doctor record (with studios) for the logged-in doctor.
-    Auto-creates a placeholder profile if missing so new self-registered doctors
-    can use the dashboard immediately."""
     if current_user.role != 'doctor':
         raise HTTPException(403, "Solo per medici")
     doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
@@ -750,6 +747,38 @@ async def doctor_me(current_user: User = Depends(get_current_user)):
     new_doctor.pop('_id', None)
     logger.info(f"Auto-created doctor profile for {current_user.email} (id={new_doctor['doctor_id']})")
     return new_doctor
+
+
+class DoctorUpdate(BaseModel):
+    title: Optional[str] = None
+    name: Optional[str] = None
+    specialties: Optional[List[str]] = None
+    bio: Optional[str] = Field(None, max_length=500)
+    photo: Optional[str] = None
+    price_from: Optional[int] = Field(None, ge=10, le=10000)
+    experience_years: Optional[int] = Field(None, ge=0, le=70)
+    languages: Optional[List[str]] = None
+    opening_hours: Optional[dict] = None  # { "mon": "09:00-13:00, 15:00-19:00", ..., "sun": "" }
+
+
+@api_router.patch("/doctor/me")
+async def update_doctor_me(data: DoctorUpdate, current_user: User = Depends(get_current_user)):
+    """Update the doctor's editable profile fields. Returns the updated record."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    update = {k: v for k, v in data.model_dump(exclude_none=True).items()}
+    if update:
+        # Ensure profile exists (auto-create via doctor_me path otherwise)
+        existing = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0, 'doctor_id': 1})
+        if not existing:
+            # Trigger auto-create then retry
+            await doctor_me(current_user=current_user)
+        await db.doctors.update_one(
+            {'owner_email': current_user.email},
+            {'$set': update},
+        )
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    return doctor
 
 
 class BlocksIn(BaseModel):
