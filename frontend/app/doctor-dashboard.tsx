@@ -11,6 +11,7 @@ import { useAuth } from '../src/AuthContext';
 import { api } from '../src/api';
 import { formatDateLong, formatDateShort, formatTime, openExternal, whatsappLink, mapsLink } from '../src/utils';
 import { specialtyLabel } from '../src/specialties';
+import { AvailabilityManager } from '../src/components/AvailabilityManager';
 
 interface Booking {
   booking_id: string;
@@ -36,14 +37,20 @@ export default function DoctorDashboard() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [studios, setStudios] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<'agenda' | 'availability'>('agenda');
 
   const load = useCallback(async () => {
     if (user?.role !== 'doctor') { setLoading(false); return; }
     try {
-      const r = await api.get('/doctor/bookings');
-      setBookings(r.data);
+      const [bRes, mRes] = await Promise.all([
+        api.get('/doctor/bookings'),
+        api.get('/doctor/me').catch(() => ({ data: null })),
+      ]);
+      setBookings(bRes.data);
+      if (mRes.data) setStudios(mRes.data.studios || []);
     } catch (e) { console.warn(e); }
     finally { setLoading(false); setRefreshing(false); }
   }, [user]);
@@ -149,67 +156,116 @@ export default function DoctorDashboard() {
         contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: 32 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={theme.primary} />}
       >
-        {/* Next-up card */}
-        {metrics.nextUp && (
-          <NextUpCard theme={theme} booking={metrics.nextUp} />
+        {/* Tab switcher */}
+        <View style={[styles.tabSwitcher, { backgroundColor: theme.surfaceAlt }]}>
+          <TouchableOpacity
+            testID="tab-agenda"
+            style={[styles.tabBtn, tab === 'agenda' && { backgroundColor: theme.surface, ...styles.tabBtnActive }]}
+            onPress={() => setTab('agenda')}
+          >
+            <Ionicons name="calendar" size={16} color={tab === 'agenda' ? theme.primary : theme.textSecondary} />
+            <Text style={{ color: tab === 'agenda' ? theme.primary : theme.textSecondary, fontWeight: '700', fontSize: 13 }}>
+              Agenda
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="tab-availability"
+            style={[styles.tabBtn, tab === 'availability' && { backgroundColor: theme.surface, ...styles.tabBtnActive }]}
+            onPress={() => setTab('availability')}
+          >
+            <Ionicons name="time" size={16} color={tab === 'availability' ? theme.primary : theme.textSecondary} />
+            <Text style={{ color: tab === 'availability' ? theme.primary : theme.textSecondary, fontWeight: '700', fontSize: 13 }}>
+              Disponibilità
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {tab === 'agenda' ? (
+          <>
+            {/* Next-up card */}
+            {metrics.nextUp && (
+              <NextUpCard theme={theme} booking={metrics.nextUp} />
+            )}
+
+            {/* Stats grid */}
+            <View style={styles.statsGrid}>
+              <StatCard theme={theme} label="Oggi" value={metrics.today.length.toString()} icon="today-outline" color={theme.primary} testID="stat-today" />
+              <StatCard theme={theme} label="Settimana" value={metrics.thisWeek.toString()} icon="calendar-outline" color={theme.secondary} testID="stat-week" />
+            </View>
+            <View style={styles.statsGrid}>
+              <StatCard theme={theme} label="Pazienti" value={metrics.totalPatients.toString()} icon="people-outline" color="#F59E0B" testID="stat-patients" />
+              <StatCard theme={theme} label="Completate" value={metrics.completed.toString()} icon="checkmark-done-outline" color="#A855F7" testID="stat-completed" />
+            </View>
+
+            {/* Today's agenda */}
+            <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+              <View style={styles.sectionHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={[styles.dot, { backgroundColor: theme.secondary }]} />
+                  <Text style={[styles.sectionTitle, { color: theme.text }]}>Agenda di oggi</Text>
+                </View>
+                <Text style={[styles.sectionMeta, { color: theme.textMuted }]}>
+                  {metrics.today.length} visit{metrics.today.length === 1 ? 'a' : 'e'}
+                </Text>
+              </View>
+
+              {loading ? (
+                <ActivityIndicator color={theme.primary} style={{ marginVertical: 24 }} />
+              ) : metrics.today.length === 0 ? (
+                <View style={styles.emptyTodaY}>
+                  <Ionicons name="cafe-outline" size={42} color={theme.textMuted} />
+                  <Text style={[styles.emptyText, { color: theme.textSecondary, marginTop: 8 }]}>
+                    Nessuna visita oggi. Goditi una giornata tranquilla ☕
+                  </Text>
+                </View>
+              ) : (
+                metrics.today.map((b, i) => (
+                  <BookingRow key={b.booking_id} booking={b} theme={theme} isFirst={i === 0} />
+                ))
+              )}
+            </View>
+
+            {/* Upcoming */}
+            <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+              <View style={styles.sectionHeader}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Prossime visite</Text>
+                <Text style={[styles.sectionMeta, { color: theme.textMuted }]}>
+                  {metrics.upcoming.length} totali
+                </Text>
+              </View>
+              {metrics.upcoming.length === 0 ? (
+                <Text style={{ color: theme.textSecondary, textAlign: 'center', marginVertical: 24 }}>
+                  Nessuna visita programmata.
+                </Text>
+              ) : (
+                metrics.upcoming.slice(0, 8).map((b) => (
+                  <BookingRow key={b.booking_id} booking={b} theme={theme} showDate />
+                ))
+              )}
+            </View>
+          </>
+        ) : (
+          /* Availability tab */
+          <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={styles.sectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={[styles.dot, { backgroundColor: theme.primary }]} />
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Gestisci disponibilità</Text>
+              </View>
+            </View>
+            <Text style={{ color: theme.textSecondary, fontSize: 13, marginBottom: 12, lineHeight: 19 }}>
+              Tocca uno slot per selezionarlo. Puoi <Text style={{ fontWeight: '700' }}>bloccare</Text> più slot insieme
+              (es. quando sei in ferie, in sala operatoria o in trasferta).
+              Gli slot bloccati non sono prenotabili dai pazienti.
+            </Text>
+
+            {studios.length === 0 ? (
+              <ActivityIndicator color={theme.primary} style={{ marginVertical: 24 }} />
+            ) : (
+              <AvailabilityManager studios={studios} theme={theme} />
+            )}
+          </View>
         )}
-
-        {/* Stats grid */}
-        <View style={styles.statsGrid}>
-          <StatCard theme={theme} label="Oggi" value={metrics.today.length.toString()} icon="today-outline" color={theme.primary} testID="stat-today" />
-          <StatCard theme={theme} label="Settimana" value={metrics.thisWeek.toString()} icon="calendar-outline" color={theme.secondary} testID="stat-week" />
-        </View>
-        <View style={styles.statsGrid}>
-          <StatCard theme={theme} label="Pazienti" value={metrics.totalPatients.toString()} icon="people-outline" color="#F59E0B" testID="stat-patients" />
-          <StatCard theme={theme} label="Completate" value={metrics.completed.toString()} icon="checkmark-done-outline" color="#A855F7" testID="stat-completed" />
-        </View>
-
-        {/* Today's agenda */}
-        <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <View style={styles.sectionHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <View style={[styles.dot, { backgroundColor: theme.secondary }]} />
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>Agenda di oggi</Text>
-            </View>
-            <Text style={[styles.sectionMeta, { color: theme.textMuted }]}>
-              {metrics.today.length} visit{metrics.today.length === 1 ? 'a' : 'e'}
-            </Text>
-          </View>
-
-          {loading ? (
-            <ActivityIndicator color={theme.primary} style={{ marginVertical: 24 }} />
-          ) : metrics.today.length === 0 ? (
-            <View style={styles.emptyTodaY}>
-              <Ionicons name="cafe-outline" size={42} color={theme.textMuted} />
-              <Text style={[styles.emptyText, { color: theme.textSecondary, marginTop: 8 }]}>
-                Nessuna visita oggi. Goditi una giornata tranquilla ☕
-              </Text>
-            </View>
-          ) : (
-            metrics.today.map((b, i) => (
-              <BookingRow key={b.booking_id} booking={b} theme={theme} isFirst={i === 0} />
-            ))
-          )}
-        </View>
-
-        {/* Upcoming */}
-        <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>Prossime visite</Text>
-            <Text style={[styles.sectionMeta, { color: theme.textMuted }]}>
-              {metrics.upcoming.length} totali
-            </Text>
-          </View>
-          {metrics.upcoming.length === 0 ? (
-            <Text style={{ color: theme.textSecondary, textAlign: 'center', marginVertical: 24 }}>
-              Nessuna visita programmata.
-            </Text>
-          ) : (
-            metrics.upcoming.slice(0, 8).map((b) => (
-              <BookingRow key={b.booking_id} booking={b} theme={theme} showDate />
-            ))
-          )}
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -364,4 +420,10 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, textAlign: 'center' },
   btn: { paddingHorizontal: 24, paddingVertical: 14, borderRadius: 14 },
   btnText: { fontSize: 14, fontWeight: '700' },
+
+  tabSwitcher: { flexDirection: 'row', padding: 4, borderRadius: 14, gap: 4 },
+  tabBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 10 },
+  tabBtnActive: {
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
 });

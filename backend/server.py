@@ -336,7 +336,7 @@ async def get_doctor(doctor_id: str):
 @api_router.get("/doctors/{doctor_id}/availability")
 async def get_availability(doctor_id: str, studio_id: str, date: str):
     """Generate deterministic time slots for the given date based on doctor_id + studio_id + date.
-    Excludes already booked slots."""
+    Excludes already booked slots and blocks set by the doctor."""
     try:
         target_date = datetime.fromisoformat(date).date()
     except Exception:
@@ -348,39 +348,55 @@ async def get_availability(doctor_id: str, studio_id: str, date: str):
     if not doctor:
         raise HTTPException(404, "Medico non trovato")
 
-    weekday = target_date.weekday()
-    if weekday == 6:  # Sunday closed
-        return {'date': date, 'slots': []}
+    base = compute_default_slots(doctor_id, studio_id, target_date)
 
-    # Generate slots based on a hash of inputs (deterministic but varied)
+    # Exclude booked + blocked
+    blocked = await get_blocked_times(doctor_id, studio_id, target_date)
+    booked_times = await get_booked_times(doctor_id, studio_id, target_date)
+    available = [s for s in base if s not in booked_times and s not in blocked]
+    return {'date': date, 'slots': available}
+
+
+def compute_default_slots(doctor_id: str, studio_id: str, target_date: date_type) -> list[str]:
+    weekday = target_date.weekday()
+    if weekday == 6:
+        return []
     seed = (hash(doctor_id + studio_id + str(target_date)) % 10000) % 8
     morning = ["08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "12:00"]
     afternoon = ["14:30", "15:00", "15:30", "16:00", "16:30", "17:00", "17:30", "18:00"]
     base = morning + afternoon
-    # Remove some slots based on seed for realism
     keep = [s for i, s in enumerate(base) if (i + seed) % 3 != 0]
-    if weekday == 5:  # Saturday only morning
+    if weekday == 5:
         keep = [s for s in keep if s in morning]
+    return keep
 
-    # Exclude booked slots
+
+async def get_booked_times(doctor_id: str, studio_id: str, target_date: date_type) -> set[str]:
     day_start = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
     booked = await db.bookings.find({
         'doctor_id': doctor_id, 'studio_id': studio_id,
         'status': 'confermato'
-    }, {'_id': 0, 'datetime_iso': 1}).to_list(200)
-    booked_times = set()
+    }, {'_id': 0, 'datetime_iso': 1}).to_list(500)
+    out: set[str] = set()
     for b in booked:
         try:
             dt = datetime.fromisoformat(b['datetime_iso'].replace('Z', '+00:00'))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             if day_start <= dt < day_end:
-                booked_times.add(dt.strftime('%H:%M'))
+                out.add(dt.strftime('%H:%M'))
         except Exception:
             pass
-    available = [s for s in keep if s not in booked_times]
-    return {'date': date, 'slots': available}
+    return out
+
+
+async def get_blocked_times(doctor_id: str, studio_id: str, target_date: date_type) -> set[str]:
+    docs = await db.doctor_blocks.find({
+        'doctor_id': doctor_id, 'studio_id': studio_id,
+        'date': target_date.isoformat(),
+    }, {'_id': 0, 'time': 1}).to_list(200)
+    return {d['time'] for d in docs}
 
 # ==========================
 # Bookings
@@ -462,6 +478,120 @@ async def doctor_bookings(current_user: User = Depends(get_current_user)):
         {'_id': 0}
     ).sort('datetime_iso', 1).to_list(500)
     return items
+
+
+@api_router.get("/doctor/me")
+async def doctor_me(current_user: User = Depends(get_current_user)):
+    """Return the doctor record (with studios) for the logged-in doctor."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato. Contattare il supporto.")
+    return doctor
+
+
+class BlocksIn(BaseModel):
+    studio_id: str
+    date: str           # YYYY-MM-DD
+    times: List[str]    # ["09:00", "09:30", ...]
+
+
+@api_router.get("/doctor/availability")
+async def doctor_availability(
+    studio_id: str, date: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Return all default slots for the day with their status (available / booked / blocked).
+    Doctor-only view used by the dashboard."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato")
+    if not any(s['studio_id'] == studio_id for s in doctor.get('studios', [])):
+        raise HTTPException(404, "Studio non trovato")
+    try:
+        target_date = datetime.fromisoformat(date).date()
+    except Exception:
+        raise HTTPException(400, "Data non valida")
+
+    base = compute_default_slots(doctor['doctor_id'], studio_id, target_date)
+    blocked = await get_blocked_times(doctor['doctor_id'], studio_id, target_date)
+    booked = await get_booked_times(doctor['doctor_id'], studio_id, target_date)
+
+    slots = []
+    for t in base:
+        status = 'available'
+        if t in booked:
+            status = 'booked'
+        elif t in blocked:
+            status = 'blocked'
+        slots.append({'time': t, 'status': status})
+
+    return {
+        'date': date,
+        'studio_id': studio_id,
+        'slots': slots,
+        'is_closed': len(base) == 0,
+    }
+
+
+@api_router.post("/doctor/blocks")
+async def add_blocks(data: BlocksIn, current_user: User = Depends(get_current_user)):
+    """Block one or more slots so patients cannot book them."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato")
+    if not any(s['studio_id'] == data.studio_id for s in doctor.get('studios', [])):
+        raise HTTPException(404, "Studio non trovato")
+    try:
+        datetime.fromisoformat(data.date)
+    except Exception:
+        raise HTTPException(400, "Data non valida")
+
+    now = datetime.now(timezone.utc)
+    inserted = 0
+    for t in data.times:
+        # Idempotent insert
+        res = await db.doctor_blocks.update_one(
+            {
+                'doctor_id': doctor['doctor_id'],
+                'studio_id': data.studio_id,
+                'date': data.date,
+                'time': t,
+            },
+            {'$setOnInsert': {
+                'doctor_id': doctor['doctor_id'],
+                'studio_id': data.studio_id,
+                'date': data.date,
+                'time': t,
+                'created_at': now,
+            }},
+            upsert=True
+        )
+        if res.upserted_id:
+            inserted += 1
+    return {'ok': True, 'blocked': len(data.times), 'newly_blocked': inserted}
+
+
+@api_router.delete("/doctor/blocks")
+async def remove_blocks(data: BlocksIn, current_user: User = Depends(get_current_user)):
+    """Unblock one or more slots."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato")
+    res = await db.doctor_blocks.delete_many({
+        'doctor_id': doctor['doctor_id'],
+        'studio_id': data.studio_id,
+        'date': data.date,
+        'time': {'$in': data.times},
+    })
+    return {'ok': True, 'unblocked': res.deleted_count}
 
 # ==========================
 # Seed
@@ -692,6 +822,7 @@ async def startup_event():
     await db.user_sessions.create_index("session_token", unique=True)
     await db.doctors.create_index("doctor_id", unique=True)
     await db.bookings.create_index("booking_id", unique=True)
+    await db.doctor_blocks.create_index([("doctor_id", 1), ("studio_id", 1), ("date", 1), ("time", 1)], unique=True)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
