@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
@@ -6,18 +6,23 @@ import {
 import { useRouter, Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../src/useTheme';
-import { useAuth } from '../../src/AuthContext';
+import { useAuth, routeForUser } from '../../src/AuthContext';
 import { Logo } from '../../src/components/Logo';
 
 export default function Login() {
   const theme = useTheme();
-  const { login, loginGoogle } = useAuth();
+  const { login, loginGoogle, user } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // If user becomes authenticated (e.g. after Google OAuth on mobile), redirect by role.
+  useEffect(() => {
+    if (user) router.replace(routeForUser(user) as any);
+  }, [user, router]);
 
   const onLogin = async () => {
     if (!email || !password) {
@@ -27,8 +32,8 @@ export default function Login() {
     setLoading(true);
     setError(null);
     try {
-      await login(email.trim(), password);
-      router.replace('/(tabs)/home');
+      const u = await login(email.trim(), password);
+      router.replace(routeForUser(u) as any);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Accesso fallito.');
     } finally {
@@ -40,6 +45,9 @@ export default function Login() {
     setLoading(true);
     try {
       await loginGoogle();
+      // On mobile: AuthContext sets `user` after processSessionId. The /index splash
+      // (which we land on after auth) will redirect by role. We also handle here as fallback.
+      // No-op if web (page redirect handles it).
     } catch (e: any) {
       setError('Login Google fallito.');
     } finally {

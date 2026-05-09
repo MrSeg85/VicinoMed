@@ -15,13 +15,20 @@ export type User = {
 type AuthCtx = {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string, role: 'patient' | 'doctor', phone?: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
+  register: (email: string, password: string, name: string, role: 'patient' | 'doctor', phone?: string) => Promise<User>;
   loginGoogle: () => Promise<void>;
-  processSessionId: (sessionId: string) => Promise<void>;
+  processSessionId: (sessionId: string) => Promise<User>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
+
+/** Route iniziale per un utente in base al suo ruolo. */
+export function routeForUser(user: User | null): string {
+  if (!user) return '/auth/login';
+  if (user.role === 'doctor') return '/doctor-dashboard';
+  return '/(tabs)/home';
+}
 
 const Ctx = createContext<AuthCtx | null>(null);
 
@@ -68,18 +75,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const r = await api.post('/auth/login', { email, password });
     await setToken(r.data.session_token);
     setUser(r.data.user);
+    return r.data.user as User;
   };
 
   const register = async (email: string, password: string, name: string, role: 'patient' | 'doctor', phone?: string) => {
     const r = await api.post('/auth/register', { email, password, name, role, phone });
     await setToken(r.data.session_token);
     setUser(r.data.user);
+    return r.data.user as User;
   };
 
   const processSessionId = async (sessionId: string) => {
     const r = await api.post('/auth/google/session', { session_id: sessionId });
     await setToken(r.data.session_token);
     setUser(r.data.user);
+    return r.data.user as User;
   };
 
   const loginGoogle = async () => {
@@ -89,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const url = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`;
     if (Platform.OS === 'web') {
       window.location.href = url;
+      // After redirect, app comes back on `/` (index.tsx) which handles role-based redirect via useEffect.
     } else {
       const WebBrowser = await import('expo-web-browser');
       const result = await WebBrowser.openAuthSessionAsync(url, redirect);

@@ -6,7 +6,7 @@ import {
 import { useRouter, Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../src/useTheme';
-import { useAuth } from '../../src/AuthContext';
+import { useAuth, routeForUser } from '../../src/AuthContext';
 import { Logo } from '../../src/components/Logo';
 
 export default function Register() {
@@ -33,8 +33,8 @@ export default function Register() {
     setLoading(true);
     setError(null);
     try {
-      await register(email.trim(), password, name.trim(), role, phone.trim() || undefined);
-      router.replace('/(tabs)/home');
+      const u = await register(email.trim(), password, name.trim(), role, phone.trim() || undefined);
+      router.replace(routeForUser(u) as any);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Registrazione fallita.');
     } finally {
