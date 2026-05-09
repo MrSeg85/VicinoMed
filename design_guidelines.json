@@ -1,0 +1,178 @@
+{
+  "theme_archetype": {
+    "primary_archetype": "Archetype 1 (Organic & Earthy) blended with Archetype 5 (Jewel & Luxury)",
+    "mode": "Both Light and Dark Mode (Dark mode explicitly required by user)",
+    "rationale": "Medical domain requires trust, calm, and approachability (Archetype 1). The 'premium Italian private specialist' aspect demands a touch of luxury and high-contrast sophistication (Archetype 5). Deep blue and fresh green act as our anchors to convey clinical excellence and fresh healing."
+  },
+  "brand_identity": {
+    "name": "VicinoMed",
+    "tagline": "La visita specialistica più vicina a te, con il medico giusto.",
+    "tone": "Professional, Calm, Premium, Italian Elegance",
+    "core_concept": "Curated network of trusted private medical specialists in Italy."
+  },
+  "colors": {
+    "light_mode": {
+      "background": "#F8FAFC",
+      "surface": "#FFFFFF",
+      "primary": "#0A3D62",
+      "primary_foreground": "#FFFFFF",
+      "secondary": "#00C48C",
+      "secondary_foreground": "#FFFFFF",
+      "accent": "#F1F5F9",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "border": "#E2E8F0",
+      "success": "#00C48C",
+      "error": "#EF4444"
+    },
+    "dark_mode": {
+      "background": "#020617",
+      "surface": "#0F172A",
+      "primary": "#00C48C",
+      "primary_foreground": "#020617",
+      "secondary": "#0A3D62",
+      "secondary_foreground": "#FFFFFF",
+      "accent": "#1E293B",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "border": "#1E293B",
+      "success": "#00C48C",
+      "error": "#F87171"
+    },
+    "rules": [
+      "No pure #000000 or #FFFFFF for backgrounds. Always use tinted slate/blue.",
+      "Primary CTA uses Fresh Green (#00C48C) in dark mode for pop, and Deep Blue (#0A3D62) in light mode for trust.",
+      "Ensure text contrast meets APCA minimums. Avoid low-contrast text on colored backgrounds."
+    ]
+  },
+  "typography": {
+    "headings": {
+      "family": "Outfit, sans-serif",
+      "style": "tracking-tight",
+      "weights": "font-light to font-semibold (Avoid generic bold)"
+    },
+    "body": {
+      "family": "Inter, sans-serif",
+      "style": "leading-relaxed",
+      "weights": "font-normal"
+    },
+    "scales": {
+      "h1": "text-4xl sm:text-5xl",
+      "h2": "text-2xl sm:text-3xl",
+      "h3": "text-xl sm:text-2xl",
+      "body": "text-base",
+      "small": "text-sm"
+    },
+    "rules": [
+      "Use Outfit for a modern, premium, geometric feel.",
+      "Never use Inter for headings.",
+      "Italian copy requires excellent legibility for accents (à, è, ì, ò, ù)."
+    ]
+  },
+  "spacing_and_layout": {
+    "spacing_scale": "p-4, p-6, p-8, p-12",
+    "border_radius": "rounded-2xl (16px) or rounded-3xl (24px) for all primary cards to ensure soft, premium feel.",
+    "grids": "Bento-style grids for dashboard, single-column smooth flow for mobile app views.",
+    "rules": [
+      "Optical alignment over geometrical.",
+      "High white space (generous padding inside cards: p-6 or p-8).",
+      "Adaptive UI for large screens: Expand mobile views into multi-column bento grids."
+    ]
+  },
+  "surfaces": {
+    "cards": "Soft shadows (shadow-lg shadow-blue-900/5) in light mode, subtle 1px border (border-white/10) in dark mode. Glassmorphism only for sticky headers/bottom nav.",
+    "glassmorphism": "backdrop-blur-xl bg-white/70 (light) or bg-slate-900/60 (dark).",
+    "badges": "Pill-shaped (rounded-full) for trust signals (Verified Doctor, Rating, Specialty)."
+  },
+  "components": {
+    "buttons": "Large tap targets (h-14), rounded-2xl. Primary: solid color. Secondary: subtle background.",
+    "inputs": "Shadcn input, rounded-xl, high contrast on focus.",
+    "map": "Leaflet/OpenStreetMap integration with custom markers (Deep Blue/Fresh Green).",
+    "calendar": "Shadcn calendar with custom rounded-xl active states.",
+    "bottom_nav": "Fixed bottom, glassmorphic, 4-5 items max (Home, Map, Appointments, Profile).",
+    "rules": [
+      "Include data-testid on all interactive elements (e.g., data-testid='book-appointment-button').",
+      "WhatsApp buttons must use official brand green (#25D366) where appropriate, or inherit our fresh green."
+    ]
+  },
+  "icons_and_assets": {
+    "library": "lucide-react (default) or @phosphor-icons/react (Duotone weight for premium feel)",
+    "rules": [
+      "24px for standard icons.",
+      "Use stroke-width 1.5 for a lighter, more elegant look."
+    ]
+  },
+  "image_urls": {
+    "app_icon": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/87af1e4f-10c1-4a17-877a-8e2aab082b6f/images/8aa51e21c01f303e7263c1d7b1cbe5adcd8435c5a525eeff1af47cdfb515d997.png",
+      "description": "Premium App Icon (Shield + Cross + Pin in Blue/Green), use for branding and splash screen"
+    },
+    "onboarding_light": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/87af1e4f-10c1-4a17-877a-8e2aab082b6f/images/d11a3fe1529b954bc405b0209ec8cba02821aeb763d55fa2da2ec99704a1438f.png",
+      "description": "Abstract Light Onboarding Background for initial user flow"
+    },
+    "onboarding_dark": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/87af1e4f-10c1-4a17-877a-8e2aab082b6f/images/222d7292d2197a9c77adc880048d0de76d69d3fc61374819d3b8dfea4da4ad60.png",
+      "description": "Abstract Dark Onboarding Background for initial user flow in dark mode"
+    },
+    "doctor_portraits": [
+      {
+        "url": "https://images.unsplash.com/photo-1615177393114-bd2917a4f74a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzR8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBkb2N0b3IlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzgzNDg2NjV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Male doctor portrait 1"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1612943705904-e2e101abcd19?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzR8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBkb2N0b3IlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzgzNDg2NjV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Male doctor portrait 2"
+      },
+      {
+        "url": "https://images.pexels.com/photos/19438566/pexels-photo-19438566.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Male doctor portrait 3"
+      }
+    ],
+    "clinic_interiors": [
+      {
+        "url": "https://images.unsplash.com/photo-1759262151080-e05ba1c6294f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHwyfHxwcmVtaXVtJTIwbWVkaWNhbCUyMGNsaW5pYyUyMGludGVyaW9yfGVufDB8fHx8MTc3ODM0ODY2NXww&ixlib=rb-4.1.0&q=85",
+        "description": "Modern waiting room interior"
+      },
+      {
+        "url": "https://images.pexels.com/photos/33812025/pexels-photo-33812025.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Warm and inviting medical center reception"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "name": "Onboarding",
+      "flow": "3-4 slides explaining 'Trova specialista', 'Prenota subito', 'Gestisci appuntamenti'. Uses full-bleed abstract backgrounds, glassmorphic text cards."
+    },
+    {
+      "name": "Home (Patient)",
+      "flow": "Auto geolocation 'Vicino a te'. Smart search bar. Category pills (Cardiologia, Dermatologia). Horizontal scroll of 'Medici Consigliati'."
+    },
+    {
+      "name": "Search & Map",
+      "flow": "Toggle between List and Map view. Map pins are Fresh Green. Bottom sheet for doctor preview when pin tapped."
+    },
+    {
+      "name": "Doctor Profile",
+      "flow": "Hero image/portrait. Verified badge. Bio. Rating. 'Studi Medici' list. Date horizontal scroll -> Time slot grid. Sticky 'Prenota Visita' CTA at bottom."
+    },
+    {
+      "name": "My Appointments",
+      "flow": "List of upcoming/past. Cards have WhatsApp deep-link buttons (Scrivi al medico, Disdici, Conferma)."
+    },
+    {
+      "name": "Doctor Dashboard",
+      "flow": "Bento grid layout. Quick stats. Upcoming patients list. Manage studio availability toggles."
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Build the application using React and Tailwind CSS.",
+    "Use Shadcn UI for interactive components (Tabs, Dialogs, Select, Calendar, Cards) but heavily customize them to match the border-radius (16px-24px) and colors defined here.",
+    "Implement a Dark Mode toggle. The app must look premium in both modes.",
+    "All copy must be strictly in professional Italian.",
+    "Ensure the layout is responsive (mobile-first for the app feel, adapting to larger screens like TV via grid expansions).",
+    "Use standard semantic HTML tags and proper data-testid attributes for testing.",
+    "Do not use placeholder images. Use the provided URLs in 'image_urls'."
+  ]
+}
