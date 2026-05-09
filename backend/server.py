@@ -710,13 +710,46 @@ async def doctor_bookings(current_user: User = Depends(get_current_user)):
 
 @api_router.get("/doctor/me")
 async def doctor_me(current_user: User = Depends(get_current_user)):
-    """Return the doctor record (with studios) for the logged-in doctor."""
+    """Return the doctor record (with studios) for the logged-in doctor.
+    Auto-creates a placeholder profile if missing so new self-registered doctors
+    can use the dashboard immediately."""
     if current_user.role != 'doctor':
         raise HTTPException(403, "Solo per medici")
     doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
-    if not doctor:
-        raise HTTPException(404, "Profilo medico non trovato. Contattare il supporto.")
-    return doctor
+    if doctor:
+        return doctor
+
+    # Auto-create a minimal doctor record with one placeholder studio
+    new_doctor = {
+        'doctor_id': f"doc_{uuid.uuid4().hex[:10]}",
+        'name': current_user.name or current_user.email.split('@')[0],
+        'title': 'Dott.',
+        'specialties': [],
+        'bio': "Profilo da completare. Aggiungi una bio nelle impostazioni.",
+        'photo': current_user.picture or "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?crop=entropy&cs=srgb&fm=jpg&q=85&w=400",
+        'rating': 0.0,
+        'reviews_count': 0,
+        'verified': False,
+        'price_from': 80,
+        'experience_years': 0,
+        'languages': ['Italiano'],
+        'owner_email': current_user.email,
+        'studios': [{
+            'studio_id': f"std_{uuid.uuid4().hex[:10]}",
+            'name': 'Studio principale',
+            'address': 'Via da configurare 1',
+            'city': 'Milano',
+            'postal_code': '00000',
+            'lat': 45.4642,
+            'lng': 9.1900,
+            'phone': current_user.phone or '+39 000 0000000',
+        }],
+        'created_at': datetime.now(timezone.utc),
+    }
+    await db.doctors.insert_one(new_doctor)
+    new_doctor.pop('_id', None)
+    logger.info(f"Auto-created doctor profile for {current_user.email} (id={new_doctor['doctor_id']})")
+    return new_doctor
 
 
 class BlocksIn(BaseModel):

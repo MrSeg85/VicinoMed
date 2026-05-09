@@ -38,22 +38,46 @@ export default function DoctorDashboard() {
   const { user, logout } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [studios, setStudios] = useState<any[]>([]);
+  const [studiosError, setStudiosError] = useState<string | null>(null);
+  const [studiosLoading, setStudiosLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'agenda' | 'availability'>('agenda');
 
+  const loadStudios = useCallback(async () => {
+    setStudiosLoading(true);
+    setStudiosError(null);
+    try {
+      const r = await api.get('/doctor/me');
+      console.log('[DoctorDashboard] /doctor/me OK', { studios: r.data?.studios?.length });
+      setStudios(r.data?.studios || []);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail;
+      console.warn('[DoctorDashboard] /doctor/me FAILED', status, detail);
+      if (status === 404) {
+        setStudiosError("Il tuo profilo medico non è ancora attivato. Contatta il supporto VicinoMed per associare i tuoi studi.");
+      } else if (status === 403) {
+        setStudiosError("Solo gli account medico possono accedere a questa sezione.");
+      } else {
+        setStudiosError("Impossibile caricare i tuoi studi. Riprova.");
+      }
+      setStudios([]);
+    } finally {
+      setStudiosLoading(false);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     if (user?.role !== 'doctor') { setLoading(false); return; }
     try {
-      const [bRes, mRes] = await Promise.all([
-        api.get('/doctor/bookings'),
-        api.get('/doctor/me').catch(() => ({ data: null })),
-      ]);
+      const bRes = await api.get('/doctor/bookings');
       setBookings(bRes.data);
-      if (mRes.data) setStudios(mRes.data.studios || []);
-    } catch (e) { console.warn(e); }
+    } catch (e) { console.warn('[DoctorDashboard] /doctor/bookings failed', e); }
     finally { setLoading(false); setRefreshing(false); }
-  }, [user]);
+    // Studios in parallel (independent failure)
+    loadStudios();
+  }, [user, loadStudios]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -259,8 +283,35 @@ export default function DoctorDashboard() {
               Gli slot bloccati non sono prenotabili dai pazienti.
             </Text>
 
-            {studios.length === 0 ? (
-              <ActivityIndicator color={theme.primary} style={{ marginVertical: 24 }} />
+            {studiosLoading ? (
+              <View style={{ padding: 32, alignItems: 'center' }}>
+                <ActivityIndicator color={theme.primary} />
+                <Text style={{ color: theme.textMuted, fontSize: 12, marginTop: 12 }}>
+                  Caricamento studi...
+                </Text>
+              </View>
+            ) : studiosError ? (
+              <View style={[styles.errorCard, { borderColor: theme.warning, backgroundColor: theme.warning + '15' }]} testID="avail-error">
+                <Ionicons name="alert-circle" size={28} color={theme.warning} />
+                <Text style={[styles.errorTitle, { color: theme.text }]}>Profilo non disponibile</Text>
+                <Text style={[styles.errorText, { color: theme.textSecondary }]}>{studiosError}</Text>
+                <TouchableOpacity
+                  testID="avail-retry"
+                  style={[styles.retryBtn, { backgroundColor: theme.primary }]}
+                  onPress={loadStudios}
+                >
+                  <Ionicons name="refresh" size={16} color={theme.primaryFg} />
+                  <Text style={{ color: theme.primaryFg, fontWeight: '700', marginLeft: 6 }}>Riprova</Text>
+                </TouchableOpacity>
+              </View>
+            ) : studios.length === 0 ? (
+              <View style={[styles.errorCard, { borderColor: theme.border, backgroundColor: theme.surfaceAlt }]}>
+                <Ionicons name="business-outline" size={28} color={theme.textMuted} />
+                <Text style={[styles.errorTitle, { color: theme.text }]}>Nessuno studio configurato</Text>
+                <Text style={[styles.errorText, { color: theme.textSecondary }]}>
+                  Aggiungi almeno uno studio per gestire la tua disponibilità.
+                </Text>
+              </View>
             ) : (
               <AvailabilityManager studios={studios} theme={theme} />
             )}
@@ -426,4 +477,8 @@ const styles = StyleSheet.create({
   tabBtnActive: {
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
+  errorCard: { padding: 22, borderRadius: 16, borderWidth: 1, alignItems: 'center', gap: 8 },
+  errorTitle: { fontSize: 16, fontWeight: '700', marginTop: 8, textAlign: 'center' },
+  errorText: { fontSize: 13, textAlign: 'center', lineHeight: 19, maxWidth: 320 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, marginTop: 8 },
 });
