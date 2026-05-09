@@ -854,6 +854,129 @@ async def remove_blocks(data: BlocksIn, current_user: User = Depends(get_current
     })
     return {'ok': True, 'unblocked': res.deleted_count}
 
+
+# ==========================
+# Doctor Studios CRUD
+# ==========================
+class StudioIn(BaseModel):
+    name: str = Field(min_length=2)
+    address: str = Field(min_length=3)
+    city: str = Field(min_length=2)
+    postal_code: str = Field(min_length=5, max_length=5)
+    phone: str = Field(min_length=5)
+    lat: float
+    lng: float
+
+
+def _clean_studio(data: StudioIn) -> dict:
+    return {
+        'name': data.name.strip(),
+        'address': data.address.strip(),
+        'city': data.city.strip(),
+        'postal_code': data.postal_code.strip(),
+        'phone': data.phone.strip(),
+        'lat': float(data.lat),
+        'lng': float(data.lng),
+    }
+
+
+@api_router.post("/doctor/studios")
+async def create_studio(data: StudioIn, current_user: User = Depends(get_current_user)):
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato")
+    studio = {'studio_id': f"std_{uuid.uuid4().hex[:10]}", **_clean_studio(data)}
+    await db.doctors.update_one(
+        {'doctor_id': doctor['doctor_id']},
+        {'$push': {'studios': studio}}
+    )
+    return studio
+
+
+@api_router.patch("/doctor/studios/{studio_id}")
+async def update_studio(
+    studio_id: str, data: StudioIn,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato")
+    cleaned = _clean_studio(data)
+    res = await db.doctors.update_one(
+        {'doctor_id': doctor['doctor_id'], 'studios.studio_id': studio_id},
+        {'$set': {f'studios.$.{k}': v for k, v in cleaned.items()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Studio non trovato")
+    return {'ok': True, 'studio_id': studio_id}
+
+
+@api_router.delete("/doctor/studios/{studio_id}")
+async def delete_studio(studio_id: str, current_user: User = Depends(get_current_user)):
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    doctor = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not doctor:
+        raise HTTPException(404, "Profilo medico non trovato")
+    if len(doctor.get('studios', [])) <= 1:
+        raise HTTPException(400, "Devi avere almeno uno studio attivo. Modificalo invece di eliminarlo.")
+    res = await db.doctors.update_one(
+        {'doctor_id': doctor['doctor_id']},
+        {'$pull': {'studios': {'studio_id': studio_id}}},
+    )
+    if res.modified_count == 0:
+        raise HTTPException(404, "Studio non trovato")
+    # Cleanup: remove all blocks for this studio. Past bookings remain for history.
+    await db.doctor_blocks.delete_many({
+        'doctor_id': doctor['doctor_id'], 'studio_id': studio_id,
+    })
+    return {'ok': True}
+
+
+@api_router.get("/geocode")
+async def geocode(q: str):
+    """Simple geocoding proxy via Nominatim (OpenStreetMap). Italian addresses only.
+    Returns up to 5 suggestions with lat/lng + parsed components."""
+    if not q or len(q.strip()) < 3:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            r = await hc.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    'q': q, 'format': 'json', 'limit': 5,
+                    'countrycodes': 'it', 'addressdetails': 1,
+                },
+                headers={
+                    'User-Agent': 'VicinoMed/1.0 (support@vicinomed.it)',
+                    'Accept-Language': 'it',
+                },
+            )
+    except Exception as e:
+        logger.warning(f"Geocode error: {e}")
+        return []
+    if r.status_code != 200:
+        return []
+    out = []
+    for item in r.json():
+        a = item.get('address', {})
+        road = a.get('road') or ''
+        num = a.get('house_number') or ''
+        full_addr = f"{road} {num}".strip() or item.get('display_name', '').split(',')[0]
+        out.append({
+            'lat': float(item['lat']),
+            'lng': float(item['lon']),
+            'display_name': item.get('display_name', ''),
+            'address': full_addr,
+            'city': a.get('city') or a.get('town') or a.get('village') or a.get('municipality') or '',
+            'postal_code': a.get('postcode', ''),
+        })
+    return out
+
 # ==========================
 # Seed
 # ==========================

@@ -20,6 +20,7 @@ export default function RootLayout() {
           <Stack.Screen name="auth/reset-password" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="doctor/[id]" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="doctor/studios" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="booking/[id]" options={{ animation: 'slide_from_bottom' }} />
         </Stack>
       </AuthProvider>

@@ -276,6 +276,16 @@ export default function DoctorDashboard() {
                 <View style={[styles.dot, { backgroundColor: theme.primary }]} />
                 <Text style={[styles.sectionTitle, { color: theme.text }]}>Gestisci disponibilità</Text>
               </View>
+              <TouchableOpacity
+                testID="open-studios-mgmt"
+                style={[styles.studioMgmtBtn, { borderColor: theme.border, backgroundColor: theme.surfaceAlt }]}
+                onPress={() => router.push('/doctor/studios')}
+              >
+                <Ionicons name="business" size={14} color={theme.primary} />
+                <Text style={{ color: theme.primary, fontSize: 12, fontWeight: '700', marginLeft: 6 }}>
+                  Gestisci studi
+                </Text>
+              </TouchableOpacity>
             </View>
             <Text style={{ color: theme.textSecondary, fontSize: 13, marginBottom: 12, lineHeight: 19 }}>
               Tocca uno slot per selezionarlo. Puoi <Text style={{ fontWeight: '700' }}>bloccare</Text> più slot insieme
@@ -481,4 +491,5 @@ const styles = StyleSheet.create({
   errorTitle: { fontSize: 16, fontWeight: '700', marginTop: 8, textAlign: 'center' },
   errorText: { fontSize: 13, textAlign: 'center', lineHeight: 19, maxWidth: 320 },
   retryBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, marginTop: 8 },
+  studioMgmtBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1 },
 });
