@@ -121,6 +121,14 @@ export default function Login() {
             )}
           </TouchableOpacity>
 
+          <Link href="/auth/forgot-password" asChild>
+            <TouchableOpacity testID="login-forgot" style={styles.forgotRow}>
+              <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 14 }}>
+                Hai dimenticato la password?
+              </Text>
+            </TouchableOpacity>
+          </Link>
+
           <View style={styles.divider}>
             <View style={[styles.line, { backgroundColor: theme.border }]} />
             <Text style={[styles.or, { color: theme.textMuted }]}>oppure</Text>
@@ -176,4 +184,5 @@ const styles = StyleSheet.create({
   },
   googleText: { fontSize: 15, fontWeight: '600' },
   signupRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 20 },
+  forgotRow: { alignItems: 'center', marginTop: 14 },
 });

@@ -10,6 +10,8 @@ import uuid
 import bcrypt
 import jwt as pyjwt
 import httpx
+import secrets
+import hashlib
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
@@ -27,6 +29,15 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'vicinomed-secret-key-change-in-prod')
 JWT_ALGO = 'HS256'
 JWT_EXPIRES_DAYS = 7
+
+# Resend (email service) — dev mode if not configured
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 'DEV_MODE')
+RESEND_FROM = os.environ.get('RESEND_FROM', 'VicinoMed <onboarding@resend.dev>')
+DEV_MODE = (RESEND_API_KEY == 'DEV_MODE' or not RESEND_API_KEY)
+
+# Password reset
+RESET_TOKEN_TTL_HOURS = 1
+RESET_RATE_LIMIT_PER_HOUR = 3
 
 app = FastAPI(title="VicinoMed API")
 api_router = APIRouter(prefix="/api")
@@ -281,6 +292,223 @@ async def logout(response: Response, authorization: Optional[str] = Header(None)
         await db.user_sessions.delete_many({'session_token': token})
     response.delete_cookie('session_token', path='/')
     return {'ok': True}
+
+
+# ==========================
+# Password Reset
+# ==========================
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _build_reset_url(request: Request, raw_token: str) -> str:
+    """Build the public reset-password URL using the public origin of the incoming request."""
+    base = os.environ.get('PUBLIC_APP_URL', '').rstrip('/')
+    if not base:
+        # Derive from request: scheme + host (Kubernetes ingress rewrites /api → port 8001
+        # and / → port 3000, so the same host serves the frontend)
+        host = request.headers.get('x-forwarded-host') or request.headers.get('host', 'localhost:3000')
+        scheme = request.headers.get('x-forwarded-proto') or 'https'
+        if 'localhost' in host or '127.0.0.1' in host:
+            scheme = 'http'
+        base = f"{scheme}://{host}"
+    return f"{base}/auth/reset-password?token={raw_token}"
+
+
+def _build_reset_email_html(name: str, reset_url: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="it">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Reimposta la password VicinoMed</title></head>
+<body style="margin:0;padding:0;background:#F8FAFC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table role="presentation" width="100%" style="background:#F8FAFC;padding:40px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" style="background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 24px rgba(10,61,98,0.08);">
+        <tr><td style="background:#0A3D62;padding:32px;text-align:center;">
+          <div style="display:inline-block;width:64px;height:64px;background:#FFFFFF;border-radius:18px;line-height:64px;font-size:38px;font-weight:900;color:#0A3D62;">+</div>
+          <h1 style="margin:16px 0 4px;color:#FFFFFF;font-size:24px;font-weight:800;">VicinoMed</h1>
+          <p style="margin:0;color:rgba(255,255,255,0.85);font-size:13px;">La visita specialistica più vicina a te</p>
+        </td></tr>
+        <tr><td style="padding:36px 32px 12px;">
+          <h2 style="margin:0 0 12px;color:#0F172A;font-size:22px;font-weight:700;">Reimposta la tua password</h2>
+          <p style="margin:0 0 18px;color:#475569;font-size:15px;line-height:23px;">
+            Ciao {name or 'utente'},<br/>
+            abbiamo ricevuto una richiesta di reimpostazione password per il tuo account VicinoMed.
+            Tocca il pulsante qui sotto per impostarne una nuova.
+          </p>
+          <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+            <tr><td style="border-radius:14px;background:#00C48C;">
+              <a href="{reset_url}" target="_blank" style="display:inline-block;padding:14px 28px;color:#FFFFFF;font-size:15px;font-weight:700;text-decoration:none;border-radius:14px;">
+                Reimposta password →
+              </a>
+            </td></tr>
+          </table>
+          <p style="margin:0 0 8px;color:#64748B;font-size:13px;line-height:20px;">
+            Oppure copia e incolla questo link nel browser:
+          </p>
+          <p style="margin:0 0 24px;word-break:break-all;color:#0A3D62;font-size:12px;background:#F1F5F9;padding:10px 12px;border-radius:8px;">
+            {reset_url}
+          </p>
+          <div style="border-top:1px solid #E2E8F0;padding-top:18px;color:#94A3B8;font-size:12px;line-height:18px;">
+            🔒 Il link è valido per 1 ora ed è utilizzabile una sola volta.<br/>
+            Se non hai richiesto tu il reset, puoi ignorare questa email — la tua password non verrà modificata.
+          </div>
+        </td></tr>
+        <tr><td style="background:#F8FAFC;padding:18px;text-align:center;color:#94A3B8;font-size:12px;">
+          © 2026 VicinoMed · La tua salute, vicino a te
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
+async def _send_reset_email(to_email: str, name: str, reset_url: str) -> bool:
+    """Send via Resend if configured, otherwise dev-mode log to console.
+    Returns True if 'sent' (real or simulated)."""
+    html = _build_reset_email_html(name, reset_url)
+    subject = "Reimposta la tua password VicinoMed"
+
+    if DEV_MODE:
+        logger.warning("\n" + "=" * 78 + "\n" +
+                       "📧  [DEV MODE] EMAIL DI RESET PASSWORD (non inviata realmente)\n" +
+                       f"    A: {to_email}\n" +
+                       f"    Oggetto: {subject}\n" +
+                       f"    Link di reset: {reset_url}\n" +
+                       "    Imposta RESEND_API_KEY in backend/.env per inviare davvero.\n" +
+                       "=" * 78)
+        return True
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as hc:
+            r = await hc.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": RESEND_FROM,
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html,
+                },
+            )
+        if r.status_code >= 400:
+            logger.error(f"Resend send failed {r.status_code}: {r.text}")
+            return False
+        logger.info(f"Reset email sent to {to_email} (resend_id={r.json().get('id')})")
+        return True
+    except Exception as e:
+        logger.error(f"Resend exception: {e}")
+        return False
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(data: ForgotPasswordIn, request: Request):
+    """Generate password reset token and send via email.
+    Always returns 202 (anti-enumeration). In DEV_MODE the reset_url is also
+    returned in the response body so it can be used without email."""
+    email = data.email.lower()
+    user = await db.users.find_one({'email': email}, {'_id': 0, 'password_hash': 0})
+
+    response_payload: dict = {
+        "ok": True,
+        "message": "Se l'email è registrata riceverai a breve un link per reimpostare la password.",
+        "dev_mode": DEV_MODE,
+    }
+
+    if not user:
+        # Anti-enumeration: same response shape, do nothing
+        return response_payload
+
+    # Rate limit: max RESET_RATE_LIMIT_PER_HOUR requests per email per hour
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    recent_count = await db.password_resets.count_documents({
+        'email': email,
+        'created_at': {'$gte': one_hour_ago},
+    })
+    if recent_count >= RESET_RATE_LIMIT_PER_HOUR:
+        raise HTTPException(429, "Hai richiesto troppi reset. Riprova tra qualche minuto.")
+
+    if user.get('auth_provider') == 'google':
+        # Google users have no password — gently nudge, but don't reveal existence either
+        return response_payload
+
+    # Generate cryptographically secure token (256 bits)
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw_token)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=RESET_TOKEN_TTL_HOURS)
+
+    await db.password_resets.insert_one({
+        'token_hash': token_hash,
+        'user_id': user['user_id'],
+        'email': email,
+        'expires_at': expires_at,
+        'used': False,
+        'created_at': datetime.now(timezone.utc),
+    })
+
+    reset_url = _build_reset_url(request, raw_token)
+    await _send_reset_email(to_email=email, name=user.get('name', ''), reset_url=reset_url)
+
+    if DEV_MODE:
+        response_payload["reset_link"] = reset_url
+
+    return response_payload
+
+
+@api_router.post("/auth/reset-password", response_model=AuthOut)
+async def reset_password(data: ResetPasswordIn):
+    """Validate the reset token, update the user's password and return a fresh JWT
+    so the client can auto-login."""
+    # Validate password complexity: 8+ chars, 1 upper, 1 digit
+    pw = data.new_password
+    if len(pw) < 8 or not any(c.isupper() for c in pw) or not any(c.isdigit() for c in pw):
+        raise HTTPException(400, "La password deve essere di almeno 8 caratteri, contenere una maiuscola e un numero.")
+
+    token_hash = _hash_token(data.token)
+    record = await db.password_resets.find_one({'token_hash': token_hash}, {'_id': 0})
+    if not record or record.get('used'):
+        raise HTTPException(400, "Token non valido o già utilizzato.")
+
+    expires_at = record['expires_at']
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(400, "Token scaduto. Richiedi un nuovo link.")
+
+    user_doc = await db.users.find_one({'user_id': record['user_id']})
+    if not user_doc:
+        raise HTTPException(404, "Utente non trovato.")
+
+    new_hash = hash_password(pw)
+    await db.users.update_one(
+        {'user_id': record['user_id']},
+        {'$set': {'password_hash': new_hash}},
+    )
+
+    # One-time token: mark used + also delete other unused tokens for this user
+    await db.password_resets.update_one({'token_hash': token_hash}, {'$set': {'used': True, 'used_at': datetime.now(timezone.utc)}})
+    await db.password_resets.delete_many({'user_id': record['user_id'], 'used': False})
+
+    # Invalidate all existing Google/web sessions to force re-login on other devices
+    await db.user_sessions.delete_many({'user_id': record['user_id']})
+
+    # Auto-login: issue a fresh JWT
+    new_token = make_jwt(record['user_id'])
+    user_doc.pop('_id', None)
+    user_doc.pop('password_hash', None)
+    return AuthOut(session_token=new_token, user=User(**user_doc))
 
 # ==========================
 # Catalog Routes
@@ -823,6 +1051,10 @@ async def startup_event():
     await db.doctors.create_index("doctor_id", unique=True)
     await db.bookings.create_index("booking_id", unique=True)
     await db.doctor_blocks.create_index([("doctor_id", 1), ("studio_id", 1), ("date", 1), ("time", 1)], unique=True)
+    # Password reset tokens: unique hash + TTL auto-cleanup after 2h (covers post-expiry retention)
+    await db.password_resets.create_index("token_hash", unique=True)
+    await db.password_resets.create_index("expires_at", expireAfterSeconds=2 * 3600)
+    await db.password_resets.create_index([("email", 1), ("created_at", -1)])
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
