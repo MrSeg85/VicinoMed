@@ -17,9 +17,16 @@ export default function Register() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'patient' | 'doctor'>('patient');
+  const [role, setRole] = useState<'patient' | 'doctor' | 'studio'>('patient');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Studio extra fields
+  const [studioName, setStudioName] = useState('');
+  const [studioAddress, setStudioAddress] = useState('');
+  const [studioCity, setStudioCity] = useState('');
+  const [studioRooms, setStudioRooms] = useState('1');
+  const [studioDescription, setStudioDescription] = useState('');
 
   const onSubmit = async () => {
     if (!email || !password || !name) {
@@ -30,10 +37,24 @@ export default function Register() {
       setError('La password deve avere almeno 6 caratteri.');
       return;
     }
+    if (role === 'studio') {
+      if (!studioName.trim() || !studioAddress.trim() || !studioCity.trim() || !phone.trim()) {
+        setError('Compila tutti i campi dello studio (nome, indirizzo, città, telefono).');
+        return;
+      }
+    }
     setLoading(true);
     setError(null);
     try {
-      const u = await register(email.trim(), password, name.trim(), role, phone.trim() || undefined);
+      const studioInfo = role === 'studio' ? {
+        name: studioName.trim(),
+        address: studioAddress.trim(),
+        city: studioCity.trim(),
+        phone: phone.trim(),
+        rooms_count: Math.max(1, parseInt(studioRooms) || 1),
+        description: studioDescription.trim(),
+      } : undefined;
+      const u = await register(email.trim(), password, name.trim(), role, phone.trim() || undefined, studioInfo);
       router.replace(routeForUser(u) as any);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Registrazione fallita.');
@@ -55,7 +76,7 @@ export default function Register() {
 
         <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <View style={styles.roleRow}>
-            {(['patient', 'doctor'] as const).map(r => (
+            {(['patient', 'doctor', 'studio'] as const).map(r => (
               <TouchableOpacity
                 key={r}
                 testID={`register-role-${r}`}
@@ -66,12 +87,12 @@ export default function Register() {
                 onPress={() => setRole(r)}
               >
                 <Ionicons
-                  name={r === 'patient' ? 'person-outline' : 'medkit-outline'}
+                  name={r === 'patient' ? 'person-outline' : r === 'doctor' ? 'medkit-outline' : 'business-outline'}
                   size={18}
                   color={role === r ? theme.primaryFg : theme.text}
                 />
-                <Text style={{ color: role === r ? theme.primaryFg : theme.text, fontWeight: '600', marginLeft: 8 }}>
-                  {r === 'patient' ? 'Paziente' : 'Medico'}
+                <Text style={{ color: role === r ? theme.primaryFg : theme.text, fontWeight: '600', marginLeft: 6, fontSize: 12 }}>
+                  {r === 'patient' ? 'Paziente' : r === 'doctor' ? 'Medico' : 'Studio'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -131,6 +152,71 @@ export default function Register() {
 
           {error && <Text style={[styles.error, { color: theme.error }]}>{error}</Text>}
 
+          {role === 'studio' && (
+            <View style={[styles.studioBlock, { borderColor: theme.primary, backgroundColor: theme.accent }]}>
+              <Text style={{ color: theme.primary, fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginBottom: 10 }}>
+                INFORMAZIONI SUL TUO STUDIO
+              </Text>
+              <View style={[styles.input, { borderColor: theme.border, backgroundColor: theme.surface }]}>
+                <Ionicons name="business-outline" size={20} color={theme.textSecondary} />
+                <TextInput
+                  testID="register-studio-name"
+                  style={[styles.inputText, { color: theme.text }]}
+                  placeholder="Nome studio / clinica"
+                  placeholderTextColor={theme.textMuted}
+                  value={studioName}
+                  onChangeText={setStudioName}
+                />
+              </View>
+              <View style={[styles.input, { borderColor: theme.border, backgroundColor: theme.surface }]}>
+                <Ionicons name="location-outline" size={20} color={theme.textSecondary} />
+                <TextInput
+                  testID="register-studio-address"
+                  style={[styles.inputText, { color: theme.text }]}
+                  placeholder="Indirizzo (via e numero)"
+                  placeholderTextColor={theme.textMuted}
+                  value={studioAddress}
+                  onChangeText={setStudioAddress}
+                />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <View style={[styles.input, { flex: 2, borderColor: theme.border, backgroundColor: theme.surface }]}>
+                  <TextInput
+                    testID="register-studio-city"
+                    style={[styles.inputText, { color: theme.text }]}
+                    placeholder="Città"
+                    placeholderTextColor={theme.textMuted}
+                    value={studioCity}
+                    onChangeText={setStudioCity}
+                  />
+                </View>
+                <View style={[styles.input, { flex: 1, borderColor: theme.border, backgroundColor: theme.surface }]}>
+                  <Ionicons name="bed-outline" size={18} color={theme.textSecondary} />
+                  <TextInput
+                    testID="register-studio-rooms"
+                    style={[styles.inputText, { color: theme.text }]}
+                    placeholder="Stanze"
+                    placeholderTextColor={theme.textMuted}
+                    keyboardType="number-pad"
+                    value={studioRooms}
+                    onChangeText={(v) => setStudioRooms(v.replace(/\D/g, ''))}
+                  />
+                </View>
+              </View>
+              <View style={[styles.input, { borderColor: theme.border, backgroundColor: theme.surface, height: 80, alignItems: 'flex-start', paddingTop: 14 }]}>
+                <TextInput
+                  testID="register-studio-description"
+                  style={[styles.inputText, { color: theme.text, height: '100%' }]}
+                  placeholder="Breve descrizione (opzionale)"
+                  placeholderTextColor={theme.textMuted}
+                  value={studioDescription}
+                  onChangeText={setStudioDescription}
+                  multiline
+                />
+              </View>
+            </View>
+          )}
+
           <Text style={[styles.privacy, { color: theme.textMuted }]}>
             Continuando accetti i Termini di servizio e l&apos;Informativa sulla privacy (GDPR).
           </Text>
@@ -180,4 +266,5 @@ const styles = StyleSheet.create({
   btn: { height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   btnText: { fontSize: 16, fontWeight: '700' },
   signupRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 16 },
+  studioBlock: { padding: 14, borderRadius: 14, borderWidth: 1.5, borderStyle: 'dashed', marginBottom: 12, gap: 4 },
 });

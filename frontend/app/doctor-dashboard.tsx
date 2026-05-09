@@ -228,6 +228,30 @@ export default function DoctorDashboard() {
               <StatCard theme={theme} label="Completate" value={metrics.completed.toString()} icon="checkmark-done-outline" color="#A855F7" testID="stat-completed" />
             </View>
 
+            {/* Rent a Room banner */}
+            <TouchableOpacity
+              testID="open-rent-rooms"
+              style={[styles.rentBanner, { backgroundColor: theme.accent, borderColor: theme.primary }]}
+              onPress={() => router.push('/doctor/rent-rooms' as any)}
+              activeOpacity={0.85}
+            >
+              <View style={[styles.rentIcon, { backgroundColor: theme.primary }]}>
+                <Ionicons name="bed-outline" size={22} color={theme.primaryFg} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: theme.primary, fontSize: 11, fontWeight: '800', letterSpacing: 1 }}>
+                  NOVITÀ
+                </Text>
+                <Text style={{ color: theme.text, fontWeight: '800', fontSize: 15, marginTop: 2 }}>
+                  Affitta una stanza in studi privati
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 12, marginTop: 2 }}>
+                  Trova spazi attrezzati a ore o a giornata, vicino a te.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={22} color={theme.primary} />
+            </TouchableOpacity>
+
             {/* Today's agenda */}
             <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
               <View style={styles.sectionHeader}>
@@ -500,4 +524,6 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 13, textAlign: 'center', lineHeight: 19, maxWidth: 320 },
   retryBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, marginTop: 8 },
   studioMgmtBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1 },
+  rentBanner: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 16, borderWidth: 1, gap: 12, marginVertical: 4 },
+  rentIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
 });

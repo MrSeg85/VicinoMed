@@ -48,7 +48,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ==========================
 # Models
 # ==========================
-Role = Literal['patient', 'doctor']
+Role = Literal['patient', 'doctor', 'studio']
 
 class User(BaseModel):
     user_id: str
@@ -60,12 +60,24 @@ class User(BaseModel):
     auth_provider: Literal['email', 'google'] = 'email'
     created_at: datetime
 
+class StudioInfoIn(BaseModel):
+    name: str = Field(min_length=2)
+    address: str = Field(min_length=3)
+    city: str = Field(min_length=2)
+    postal_code: Optional[str] = None
+    description: Optional[str] = None
+    phone: str = Field(min_length=5)
+    whatsapp: Optional[str] = None
+    rooms_count: int = Field(ge=1, le=200, default=1)
+
+
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
     name: str
     role: Role = 'patient'
     phone: Optional[str] = None
+    studio_info: Optional[StudioInfoIn] = None  # required when role=studio
 
 class LoginIn(BaseModel):
     email: EmailStr
@@ -201,6 +213,8 @@ async def register(data: RegisterIn):
     existing = await db.users.find_one({'email': data.email.lower()})
     if existing:
         raise HTTPException(400, "Email già registrata")
+    if data.role == 'studio' and not data.studio_info:
+        raise HTTPException(400, "Per registrarti come Studio compila le informazioni dello studio.")
     user_id = f"user_{uuid.uuid4().hex[:12]}"
     doc = {
         'user_id': user_id,
@@ -214,6 +228,46 @@ async def register(data: RegisterIn):
         'created_at': datetime.now(timezone.utc)
     }
     await db.users.insert_one(doc)
+
+    # If studio role, eagerly create the clinic record using provided info
+    if data.role == 'studio' and data.studio_info:
+        si = data.studio_info
+        # Try to geocode the address (best-effort, non-blocking on failure)
+        lat, lng = 0.0, 0.0
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as hc:
+                geo_r = await hc.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        'q': f"{si.address}, {si.city}, Italia",
+                        'format': 'json', 'limit': 1, 'countrycodes': 'it',
+                    },
+                    headers={'User-Agent': 'VicinoMed/1.0', 'Accept-Language': 'it'},
+                )
+            if geo_r.status_code == 200 and geo_r.json():
+                first = geo_r.json()[0]
+                lat = float(first['lat']); lng = float(first['lon'])
+        except Exception as _e:
+            logger.warning(f"Geocode failed at studio register: {_e}")
+
+        await db.clinics.insert_one({
+            'clinic_id': f"cli_{uuid.uuid4().hex[:10]}",
+            'owner_email': data.email.lower(),
+            'name': si.name,
+            'description': si.description or '',
+            'address': si.address,
+            'city': si.city,
+            'postal_code': si.postal_code or '',
+            'lat': lat, 'lng': lng,
+            'phone': si.phone,
+            'whatsapp': si.whatsapp or si.phone,
+            'rooms_count': si.rooms_count,
+            'rooms': [],
+            'photo': None,
+            'verified': False,
+            'created_at': datetime.now(timezone.utc),
+        })
+
     token = make_jwt(user_id)
     user = User(**{k: v for k, v in doc.items() if k != 'password_hash'})
     return AuthOut(session_token=token, user=user)
@@ -964,6 +1018,197 @@ async def delete_studio(studio_id: str, current_user: User = Depends(get_current
         'doctor_id': doctor['doctor_id'], 'studio_id': studio_id,
     })
     return {'ok': True}
+
+
+@api_router.get("/studio/me")
+async def studio_me(current_user: User = Depends(get_current_user)):
+    """Return the clinic record for the logged-in studio owner.
+    Auto-creates a placeholder if missing."""
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    clinic = await db.clinics.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if clinic:
+        return clinic
+    new_clinic = {
+        'clinic_id': f"cli_{uuid.uuid4().hex[:10]}",
+        'owner_email': current_user.email,
+        'name': current_user.name or 'Il mio Studio',
+        'description': 'Profilo da completare.',
+        'address': '', 'city': '', 'postal_code': '',
+        'lat': 0.0, 'lng': 0.0,
+        'phone': current_user.phone or '',
+        'whatsapp': current_user.phone or '',
+        'rooms_count': 1, 'rooms': [],
+        'photo': None, 'verified': False,
+        'created_at': datetime.now(timezone.utc),
+    }
+    await db.clinics.insert_one(new_clinic)
+    new_clinic.pop('_id', None)
+    return new_clinic
+
+
+class ClinicUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=600)
+    address: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    phone: Optional[str] = None
+    whatsapp: Optional[str] = None
+    rooms_count: Optional[int] = Field(None, ge=1, le=200)
+    photo: Optional[str] = None
+
+
+@api_router.patch("/studio/me")
+async def update_studio_me(data: ClinicUpdate, current_user: User = Depends(get_current_user)):
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    update = {k: v for k, v in data.model_dump(exclude_none=True).items()}
+    if not await db.clinics.find_one({'owner_email': current_user.email}, {'_id': 0, 'clinic_id': 1}):
+        await studio_me(current_user=current_user)  # auto-create
+    if update:
+        await db.clinics.update_one({'owner_email': current_user.email}, {'$set': update})
+    return await db.clinics.find_one({'owner_email': current_user.email}, {'_id': 0})
+
+
+@api_router.get("/clinics")
+async def list_clinics(city: Optional[str] = None, limit: int = 50):
+    """Public list of clinics for doctor search."""
+    query = {}
+    if city:
+        query['city'] = {'$regex': f'^{city}$', '$options': 'i'}
+    docs = await db.clinics.find(query, {'_id': 0}).to_list(limit)
+    return docs
+
+
+# ==========================
+# Studio Rooms (Phase 2)
+# ==========================
+class RoomIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    description: Optional[str] = Field(None, max_length=500)
+    equipment: List[str] = Field(default_factory=list)
+    rental_modes: List[Literal['hourly', 'daily']] = Field(default_factory=lambda: ['hourly'])
+    hourly_price: Optional[float] = Field(None, ge=0)
+    daily_price: Optional[float] = Field(None, ge=0)
+    available: bool = True
+    photo: Optional[str] = None  # base64 or URL
+
+
+def _clean_room(data: RoomIn) -> dict:
+    out = data.model_dump(exclude_none=False)
+    out['equipment'] = [e.strip() for e in (out.get('equipment') or []) if e and e.strip()]
+    if not out.get('rental_modes'):
+        out['rental_modes'] = ['hourly']
+    # Validate prices vs modes
+    if 'hourly' in out['rental_modes'] and not out.get('hourly_price'):
+        raise HTTPException(400, "Imposta il prezzo orario per le stanze affittabili a ore.")
+    if 'daily' in out['rental_modes'] and not out.get('daily_price'):
+        raise HTTPException(400, "Imposta il prezzo giornaliero per le stanze affittabili a giornata.")
+    return out
+
+
+async def _get_owner_clinic(current_user: User):
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    clinic = await db.clinics.find_one({'owner_email': current_user.email}, {'_id': 0})
+    if not clinic:
+        raise HTTPException(404, "Profilo studio non trovato. Completa il profilo prima.")
+    return clinic
+
+
+@api_router.get("/studio/rooms")
+async def list_rooms(current_user: User = Depends(get_current_user)):
+    clinic = await _get_owner_clinic(current_user)
+    return clinic.get('rooms', [])
+
+
+@api_router.post("/studio/rooms")
+async def create_room(data: RoomIn, current_user: User = Depends(get_current_user)):
+    clinic = await _get_owner_clinic(current_user)
+    cleaned = _clean_room(data)
+    room = {
+        'room_id': f"rm_{uuid.uuid4().hex[:10]}",
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        **cleaned,
+    }
+    await db.clinics.update_one(
+        {'clinic_id': clinic['clinic_id']},
+        {'$push': {'rooms': room}}
+    )
+    return room
+
+
+@api_router.patch("/studio/rooms/{room_id}")
+async def update_room(room_id: str, data: RoomIn, current_user: User = Depends(get_current_user)):
+    clinic = await _get_owner_clinic(current_user)
+    if not any(r.get('room_id') == room_id for r in clinic.get('rooms', [])):
+        raise HTTPException(404, "Stanza non trovata")
+    cleaned = _clean_room(data)
+    await db.clinics.update_one(
+        {'clinic_id': clinic['clinic_id'], 'rooms.room_id': room_id},
+        {'$set': {f'rooms.$.{k}': v for k, v in cleaned.items()}},
+    )
+    return {'ok': True, 'room_id': room_id}
+
+
+@api_router.delete("/studio/rooms/{room_id}")
+async def delete_room(room_id: str, current_user: User = Depends(get_current_user)):
+    clinic = await _get_owner_clinic(current_user)
+    res = await db.clinics.update_one(
+        {'clinic_id': clinic['clinic_id']},
+        {'$pull': {'rooms': {'room_id': room_id}}},
+    )
+    if res.modified_count == 0:
+        raise HTTPException(404, "Stanza non trovata")
+    return {'ok': True}
+
+
+@api_router.get("/clinics/search")
+async def search_clinics_with_rooms(
+    city: Optional[str] = None,
+    mode: Optional[Literal['hourly', 'daily']] = None,
+    max_hourly: Optional[float] = None,
+    max_daily: Optional[float] = None,
+    equipment: Optional[str] = None,  # comma-separated
+    limit: int = 50,
+):
+    """Public search of clinics that have at least one available room matching filters.
+    Used by doctors looking for rooms to rent."""
+    query: dict = {'rooms.0': {'$exists': True}}
+    if city:
+        query['city'] = {'$regex': f'^{city}$', '$options': 'i'}
+    docs = await db.clinics.find(query, {'_id': 0}).to_list(limit)
+
+    eq_list = [e.strip().lower() for e in (equipment.split(',') if equipment else []) if e.strip()]
+
+    out = []
+    for clinic in docs:
+        matching = []
+        for room in clinic.get('rooms', []):
+            if not room.get('available', True):
+                continue
+            if mode and mode not in (room.get('rental_modes') or []):
+                continue
+            if max_hourly is not None and room.get('hourly_price') is not None:
+                if room['hourly_price'] > max_hourly:
+                    continue
+            if max_daily is not None and room.get('daily_price') is not None:
+                if room['daily_price'] > max_daily:
+                    continue
+            if eq_list:
+                room_eq = [str(e).lower() for e in (room.get('equipment') or [])]
+                if not all(any(want in have for have in room_eq) for want in eq_list):
+                    continue
+            matching.append(room)
+        if matching:
+            clinic_copy = {k: v for k, v in clinic.items() if k != 'rooms'}
+            clinic_copy['available_rooms'] = matching
+            clinic_copy['rooms_available_count'] = len(matching)
+            out.append(clinic_copy)
+    return out
 
 
 @api_router.get("/geocode")

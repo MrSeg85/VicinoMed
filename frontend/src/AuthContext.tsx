@@ -7,7 +7,7 @@ export type User = {
   email: string;
   name: string;
   picture?: string | null;
-  role: 'patient' | 'doctor';
+  role: 'patient' | 'doctor' | 'studio';
   phone?: string | null;
   auth_provider: 'email' | 'google';
 };
@@ -16,7 +16,7 @@ type AuthCtx = {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<User>;
-  register: (email: string, password: string, name: string, role: 'patient' | 'doctor', phone?: string) => Promise<User>;
+  register: (email: string, password: string, name: string, role: 'patient' | 'doctor' | 'studio', phone?: string, studioInfo?: any) => Promise<User>;
   loginGoogle: () => Promise<void>;
   processSessionId: (sessionId: string) => Promise<User>;
   logout: () => Promise<void>;
@@ -27,6 +27,7 @@ type AuthCtx = {
 export function routeForUser(user: User | null): string {
   if (!user) return '/auth/login';
   if (user.role === 'doctor') return '/doctor-dashboard';
+  if (user.role === 'studio') return '/studio-dashboard';
   return '/(tabs)/home';
 }
 
@@ -78,8 +79,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return r.data.user as User;
   };
 
-  const register = async (email: string, password: string, name: string, role: 'patient' | 'doctor', phone?: string) => {
-    const r = await api.post('/auth/register', { email, password, name, role, phone });
+  const register = async (email: string, password: string, name: string, role: 'patient' | 'doctor' | 'studio', phone?: string, studioInfo?: any) => {
+    const r = await api.post('/auth/register', { email, password, name, role, phone, studio_info: studioInfo });
     await setToken(r.data.session_token);
     setUser(r.data.user);
     return r.data.user as User;
