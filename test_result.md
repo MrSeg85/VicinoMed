@@ -212,6 +212,78 @@ backend:
         agent: "testing"
         comment: "All doctor request endpoints working correctly. ✅ GET /api/doctor/room-requests: Lists only own requests (filtered by doctor_user_id), status filter works (pending/accepted/rejected/cancelled), sorted by created_at DESC. ✅ PATCH /api/doctor/room-requests/{id}/cancel: Cancels pending requests, sets cancelled_at timestamp, 403 for non-doctor, 404 for other doctor's requests, 400 for non-pending requests (state machine enforced). Cross-account isolation verified."
 
+  - task: "Admin Panel - Login"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "POST /api/auth/login with admin credentials (admin@vicinomed.it / Admin2026!) works correctly. Returns session_token and user object with role='admin'. Admin user is auto-created by backend seed on startup."
+
+  - task: "Admin Panel - Stats endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/admin/stats returns comprehensive platform statistics. ✅ User counts by role (total: 6, patient: 2, doctor: 2, studio: 1, admin: 1, suspended, verified_doctors). ✅ Bookings stats (today, month, total). ✅ Room requests stats (pending: 2, total: 7, accepted_volume_month: €185.0, platform_revenue_month: €18.5 with 10% fee). ✅ Doctors profiles: 13, Clinics: 1, Reviews: 72. ✅ Role enforcement: 403 for non-admin users. All fields present and accurate."
+
+  - task: "Admin Panel - Users list with filters"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/admin/users works with all filters. ✅ No filters: Returns all 6 users with pagination (total, items, skip, limit). ✅ Role filter (?role=patient): Returns only patients (2 users). ✅ Search query (?q=admin): Returns matching users (1 match). ✅ Active filter (?is_active=true): Returns only active users. ✅ User structure validated: includes user_id, email, name, role, is_active, verified; excludes password_hash and _id. ✅ Role enforcement: 403 for non-admin users."
+
+  - task: "Admin Panel - Verify user"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "PATCH /api/admin/users/{user_id}/verify toggles user verification status correctly. ✅ Tested with doctor user: verified status toggled from False → True → False. ✅ Returns user_id and new verified status. ✅ Mirrors verification to doctor/clinic profiles. ✅ Role enforcement: 403 for non-admin users."
+
+  - task: "Admin Panel - Clinics list"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/admin/clinics returns clinic list with enriched data. ✅ Returns 1 clinic (Centro Medico Demo - Milano). ✅ Enriched fields: rooms_actual (3), rooms_available (3), requests_pending (2). ✅ Clinic structure includes: clinic_id, name, city, owner_email, rooms array. ✅ Role enforcement: 403 for non-admin users."
+
+  - task: "Admin Panel - Analytics"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/admin/analytics returns platform analytics. ✅ Top cities: 1 entry (Milano - 1 clinic, 3 rooms). ✅ Top specialties: 10 entries (otorinolaringoiatria - 1 doctor, etc.). ✅ Requests by status (30d): pending: 2, accepted: 2, rejected: 2, cancelled: 1. ✅ All required fields present. ✅ Role enforcement: 403 for non-admin users."
+
 frontend:
   - task: "Registration screen with 3 roles (Paziente/Medico/Studio)"
     implemented: true
@@ -296,16 +368,18 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.3"
-  test_sequence: 3
+  version: "1.4"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Room rental request system - doctor sends request"
-    - "Room rental request system - studio lists/responds"
-    - "Studio dashboard stats (/studio/stats)"
-    - "Doctor's own room requests (/doctor/room-requests + cancel)"
+    - "Admin Panel - Login"
+    - "Admin Panel - Stats endpoint"
+    - "Admin Panel - Users list with filters"
+    - "Admin Panel - Verify user"
+    - "Admin Panel - Clinics list"
+    - "Admin Panel - Analytics"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -450,3 +524,57 @@ agent_communication:
       2. Check API interceptor configuration for Authorization header
       3. Verify token refresh logic
       4. Test if issue is specific to doctor role or affects all roles after certain time
+
+  - agent: "testing"
+    message: |
+      ✅ ADMIN PANEL API TESTING COMPLETED (15/15 tests passed)
+      
+      **Test Credentials Used:**
+      - Admin: admin@vicinomed.it / Admin2026!
+      - Doctor (for role enforcement): medico.demo@vicinomed.it / MedicoDemo2026!
+      
+      **Test Results:**
+      
+      1. **Admin Login** - ✅ WORKING
+         - POST /api/auth/login with admin credentials successful
+         - Returns session_token and user object with role='admin'
+         - Admin user auto-created by backend seed
+      
+      2. **Admin Stats (GET /api/admin/stats)** - ✅ WORKING
+         - Returns comprehensive platform statistics
+         - Users: 6 total (2 patient, 2 doctor, 1 studio, 1 admin)
+         - Bookings: 0 today, 0 month, 0 total
+         - Room Requests: 2 pending, 7 total
+         - Revenue: €185.0 accepted volume (month), €18.5 platform revenue (10% fee)
+         - Doctors Profiles: 13, Clinics: 1, Reviews: 72
+         - Role enforcement: 403 for non-admin ✅
+      
+      3. **Admin Users List (GET /api/admin/users)** - ✅ WORKING
+         - No filters: Returns all 6 users with pagination
+         - Role filter (?role=patient): Returns 2 patients ✅
+         - Search query (?q=admin): Returns 1 match ✅
+         - Active filter (?is_active=true): Returns active users ✅
+         - User structure validated (excludes password_hash, _id)
+         - Role enforcement: 403 for non-admin ✅
+      
+      4. **Admin Verify User (PATCH /api/admin/users/{user_id}/verify)** - ✅ WORKING
+         - Toggles verification status correctly (False → True → False)
+         - Returns user_id and new verified status
+         - Mirrors to doctor/clinic profiles
+         - Role enforcement: 403 for non-admin ✅
+      
+      5. **Admin Clinics (GET /api/admin/clinics)** - ✅ WORKING
+         - Returns 1 clinic (Centro Medico Demo - Milano)
+         - Enriched data: rooms_actual (3), rooms_available (3), requests_pending (2)
+         - Role enforcement: 403 for non-admin ✅
+      
+      6. **Admin Analytics (GET /api/admin/analytics)** - ✅ WORKING
+         - Top cities: Milano (1 clinic, 3 rooms)
+         - Top specialties: 10 entries (otorinolaringoiatria, etc.)
+         - Requests by status (30d): pending: 2, accepted: 2, rejected: 2, cancelled: 1
+         - Role enforcement: 403 for non-admin ✅
+      
+      **Summary:**
+      All admin panel endpoints are working correctly. Role enforcement is properly implemented (non-admin users get 403 Forbidden). Stats reflect accurate database counts. No issues found.
+      
+      **Test File:** /app/admin_test.py
