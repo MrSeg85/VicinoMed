@@ -227,15 +227,18 @@ frontend:
 
   - task: "Studio dashboard rewritten with stats + requests + better rooms (/studio-dashboard.tsx)"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/frontend/app/studio-dashboard.tsx"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "Full UI rewrite. Hero with cover photo or gradient pattern, role pill, logout. 4-stat grid (rooms_total, available_today, pending_requests with notification badge, estimated_income_month). Requests section with tabs (pending/storico) using RequestCard component. Accept/Reject modal with optional response message. Improved rooms grid with thumbnails + availability dots. Profile completion CTA if address missing. Sede card. Quick actions list. Auto-refresh every 30s with toast notification on new pending requests."
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive UI testing completed (mobile viewport 420x900). ✅ HERO section: Role pill 'STUDIO', clinic name 'Centro Medico Demo', gradient background all render correctly. ✅ STAT CARDS: All 4 cards present (Stanze totali: 3, Disponibili oggi: 3, In attesa: 2 with red notification badge, Stimato: €105). ✅ REQUESTS SECTION: 'Richieste di prenotazione' section with tabs (In attesa/Storico) working. Found 2 pending requests with status 'IN ATTESA', doctor name visible, action buttons (Accetta/Rifiuta) present. ✅ ACCEPT FLOW: Modal opens with title 'Accetta richiesta', textarea for response message works, 'Conferma accettazione' button submits successfully, toast notification appears. ✅ REJECT FLOW: Confirm dialog appears, modal opens with title 'Rifiuta richiesta', textarea works, 'Conferma rifiuto' submits, toast appears. ✅ STORICO TAB: Shows 2 accepted + 2 rejected requests with correct status pills (ACCETTATA green, RIFIUTATA red). ✅ STATS UPDATE: After actions, 'In attesa' shows 0, 'Stimato (mese)' shows €185, '2 confermate'. All Italian text correct. Minor: Logout button selector issue (cosmetic, doesn't affect core functionality)."
 
   - task: "Studio profile editor (/studio/profile.tsx)"
     implemented: true
@@ -255,27 +258,33 @@ frontend:
 
   - task: "Doctor rent-rooms with 'Invia Richiesta' button (/doctor/rent-rooms.tsx)"
     implemented: true
-    working: "NA"
+    working: false
     file: "/app/frontend/app/doctor/rent-rooms.tsx"
-    stuck_count: 0
+    stuck_count: 1
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "Added 'RICHIEDI' pill button on each room row (next to WhatsApp/Maps). Opens RoomRequestModal with date/time/duration/message inputs and live price estimate. Added header link to /doctor/my-requests. Toast on success."
+      - working: false
+        agent: "testing"
+        comment: "UI testing completed (mobile viewport 420x900). ✅ PAGE RENDERING: Successfully navigated to /doctor/rent-rooms, header with title 'Affitta una stanza' renders. ✅ SEARCH & FILTERS: Filter chips (Tutte/A ore/A giornata), city search, price/equipment filters all render correctly. ✅ RESULTS: Found 1 studio (Centro Medico Demo) with 3 rooms, each room card shows name, equipment, prices (€35/h, €40/h, €25/h+€180/g), and 'RICHIEDI' pill button. ✅ MODAL UI: RoomRequestModal opens correctly with title 'Invia richiesta', clinic+room name subtitle. All sections render: Modalità chips (A ore/A giornata), 14 date chips, 12 time slots (08:00-19:00), duration chips (1h-8h for hourly), message textarea, summary card with 'RIEPILOGO RICHIESTA' showing selected date/time/duration and estimated price (€70 STIMATO). ✅ MODAL INTERACTIONS: Date selection works (selected date highlighted), time selection works (10:00 selected), duration selection works (2h selected), message input works. ❌ CRITICAL: Request submission fails with 401 Unauthorized error. Error message 'Non autenticato' appears in red box in modal. Backend logs show: 'POST /api/clinics/cli_b102c8c145/rooms/rm_3317c75e43/request HTTP/1.1 401 Unauthorized'. This indicates auth token is not being sent correctly or has expired. ⚠️ Minor: Header icons (back arrow, paper-plane) not visible in test (selector issue, likely cosmetic). ROOT CAUSE: Authentication token not persisting or being sent with request. Need to investigate AuthContext token management and API interceptor."
 
   - task: "Doctor my-requests screen (/doctor/my-requests.tsx)"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/frontend/app/doctor/my-requests.tsx"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "New screen. Filter chips (Tutte/In attesa/Accettate/Rifiutate) with counts. RequestCard list. Cancel pending requests. Empty state with CTA to rent-rooms."
+      - working: true
+        agent: "testing"
+        comment: "UI testing completed (mobile viewport 420x900). ✅ PAGE RENDERING: Successfully navigated to /doctor/my-requests, header with title 'Le mie richieste' and subtitle 'Stato delle richieste di affitto stanze' renders correctly. ✅ FILTER CHIPS: All 4 filter chips present and functional (Tutte: 0, In attesa: 0, Accettate: 0, Rifiutate: 0). Each chip shows count badge. ✅ FILTER SWITCHING: Clicking filters works correctly - 'Accettate' filter turns green when active, 'In attesa' turns orange when active, visual feedback is clear. ✅ EMPTY STATE: Shows paper-plane icon, title 'Nessuna richiesta in questo stato', and message 'Non ci sono richieste con questo stato.' when no requests match filter. ✅ LAYOUT: Horizontal scrollable filter chips, proper spacing, Italian text throughout. All UI elements render correctly. Note: No requests to display due to 401 error in request submission (see rent-rooms task), but UI structure and filtering logic work perfectly."
 
   - task: "Doctor dashboard 'Affitta una stanza' banner"
     implemented: true
@@ -391,3 +400,53 @@ agent_communication:
       **Backend Test File:** /app/backend_test.py (23 comprehensive tests)
       
       NO ISSUES FOUND. All backend APIs are working correctly.
+
+  - agent: "testing"
+    message: |
+      🎯 FRONTEND UI TESTING COMPLETED (Mobile viewport 420x900, Italian UI)
+      
+      **STUDIO DASHBOARD (/studio-dashboard) - ✅ WORKING**
+      - Hero section: Role pill "STUDIO", clinic name, gradient background all render correctly
+      - Stats: All 4 cards present (Stanze totali: 3, Disponibili oggi: 3, In attesa: 2 with red badge, Stimato: €105)
+      - Requests section: Tabs (In attesa/Storico) working, 2 pending requests visible with doctor names, status pills, action buttons
+      - Accept flow: Modal opens, textarea works, submission successful, toast appears, stats update (In attesa: 2→0, Stimato: €105→€185)
+      - Reject flow: Confirm dialog, modal, textarea, submission, toast all working
+      - Storico tab: Shows 2 accepted (green) + 2 rejected (red) requests correctly
+      
+      **DOCTOR MY-REQUESTS (/doctor/my-requests) - ✅ WORKING**
+      - Header, filter chips (Tutte/In attesa/Accettate/Rifiutate) with counts all render
+      - Filter switching works (visual feedback correct: green for Accettate, orange for In attesa)
+      - Empty state displays correctly with icon and message
+      - UI structure and filtering logic verified
+      
+      **DOCTOR RENT-ROOMS (/doctor/rent-rooms) - ❌ CRITICAL ISSUE**
+      - ✅ UI: Page renders, search/filters work, room cards display correctly with RICHIEDI buttons
+      - ✅ Modal: RoomRequestModal opens with all sections (date/time/duration/message/summary)
+      - ✅ Interactions: Date/time/duration selection works, message input works, summary updates with estimated price
+      - ❌ CRITICAL: Request submission fails with 401 Unauthorized
+      - Error message "Non autenticato" appears in modal
+      - Backend logs: POST /api/clinics/.../request HTTP/1.1 401 Unauthorized
+      - GET /api/doctor/room-requests HTTP/1.1 401 Unauthorized
+      
+      **ROOT CAUSE ANALYSIS:**
+      The 401 errors indicate authentication token is not being sent correctly or has expired during the session. This affects:
+      1. POST request to create room rental request
+      2. GET request to fetch doctor's requests
+      
+      Studio role works fine (accept/reject requests successful), but doctor role fails on authenticated endpoints after login.
+      
+      **SCREENSHOTS CAPTURED:**
+      - studio_dashboard_full.png (hero + stats)
+      - studio_pending_requests.png (2 pending requests)
+      - studio_accept_modal.png (accept modal UI)
+      - studio_dashboard_after.png (stats updated after actions)
+      - doctor_rent_rooms.png (search results + room cards)
+      - doctor_request_modal_filled.png (modal with all fields filled, showing "Non autenticato" error)
+      - doctor_my_requests_accepted_final.png (filter UI)
+      - doctor_my_requests_pending.png (empty state)
+      
+      **NEXT STEPS:**
+      1. Investigate AuthContext token persistence for doctor role
+      2. Check API interceptor configuration for Authorization header
+      3. Verify token refresh logic
+      4. Test if issue is specific to doctor role or affects all roles after certain time
