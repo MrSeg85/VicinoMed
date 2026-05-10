@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator,
-  RefreshControl, Platform,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Stack } from 'expo-router';
@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../src/useTheme';
 import { api } from '../../src/api';
 import { openExternal, mapsLink, whatsappLink } from '../../src/utils';
+import { RoomRequestModal } from '../../src/components/RoomRequestModal';
+import { Toast, ToastType } from '../../src/components/Toast';
 
 interface ClinicResult {
   clinic_id: string;
@@ -38,6 +40,18 @@ export default function RentRoomsScreen() {
   const [maxPrice, setMaxPrice] = useState('');
   const [equipment, setEquipment] = useState('');
 
+  // Request modal state
+  const [requestModal, setRequestModal] = useState<{
+    open: boolean; clinicId: string; clinicName: string; room: any | null;
+  }>({ open: false, clinicId: '', clinicName: '', room: null });
+
+  // Toast
+  const [toast, setToast] = useState<{ visible: boolean; msg: string; type: ToastType }>({
+    visible: false, msg: '', type: 'info',
+  });
+  const showToast = (msg: string, type: ToastType = 'info') =>
+    setToast({ visible: true, msg, type });
+
   const search = useCallback(async () => {
     setLoading(true);
     try {
@@ -59,6 +73,25 @@ export default function RentRoomsScreen() {
 
   const onRefresh = () => { setRefreshing(true); search(); };
 
+  const openRequest = (clinic: ClinicResult, room: any) => {
+    setRequestModal({
+      open: true,
+      clinicId: clinic.clinic_id,
+      clinicName: clinic.name,
+      room,
+    });
+  };
+
+  const closeRequest = () => setRequestModal({ open: false, clinicId: '', clinicName: '', room: null });
+
+  const onRequestSuccess = (req: any) => {
+    closeRequest();
+    showToast(`✓ Richiesta inviata a ${req.clinic_name}`, 'success');
+    // Optional: log for dev
+    // eslint-disable-next-line no-console
+    console.log('[VicinoMed] Richiesta creata:', req.request_id);
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -70,6 +103,12 @@ export default function RentRoomsScreen() {
           <Text style={[styles.headerTitle, { color: theme.text }]}>Affitta una stanza</Text>
           <Text style={[styles.headerSub, { color: theme.textSecondary }]}>Trova studi disponibili nella tua zona</Text>
         </View>
+        <TouchableOpacity
+          onPress={() => router.push('/doctor/my-requests' as any)}
+          style={[styles.iconBtn, { backgroundColor: theme.accent, borderColor: theme.primary }]}
+        >
+          <Ionicons name="paper-plane-outline" size={20} color={theme.primary} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -170,7 +209,7 @@ export default function RentRoomsScreen() {
                         </Text>
                       )}
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
+                    <View style={{ alignItems: 'flex-end', marginRight: 8 }}>
                       {room.rental_modes.includes('hourly') && (
                         <Text style={[styles.priceText, { color: theme.primary }]}>€{room.hourly_price?.toFixed(0)}<Text style={{ fontSize: 10, color: theme.textMuted }}>/h</Text></Text>
                       )}
@@ -178,6 +217,13 @@ export default function RentRoomsScreen() {
                         <Text style={[styles.priceText, { color: theme.primary, fontSize: 13 }]}>€{room.daily_price?.toFixed(0)}<Text style={{ fontSize: 10, color: theme.textMuted }}>/g</Text></Text>
                       )}
                     </View>
+                    <TouchableOpacity
+                      style={[styles.requestPill, { backgroundColor: theme.primary }]}
+                      onPress={() => openRequest(c, room)}
+                    >
+                      <Ionicons name="paper-plane" size={13} color={theme.primaryFg} />
+                      <Text style={{ color: theme.primaryFg, fontWeight: '800', fontSize: 11, marginLeft: 4 }}>RICHIEDI</Text>
+                    </TouchableOpacity>
                   </View>
                 ))}
                 {c.available_rooms.length > 3 && (
@@ -200,7 +246,7 @@ export default function RentRoomsScreen() {
                       onPress={() => openExternal(whatsappLink(c.whatsapp || c.phone, `Salve, sono interessato/a ad affittare una stanza presso ${c.name}.`))}
                     >
                       <Ionicons name="logo-whatsapp" size={16} color="#FFF" />
-                      <Text style={{ color: '#FFF', fontWeight: '700', marginLeft: 6, fontSize: 13 }}>Contatta</Text>
+                      <Text style={{ color: '#FFF', fontWeight: '700', marginLeft: 6, fontSize: 13 }}>WhatsApp</Text>
                     </TouchableOpacity>
                   ) : null}
                 </View>
@@ -209,6 +255,23 @@ export default function RentRoomsScreen() {
           </>
         )}
       </ScrollView>
+
+      <RoomRequestModal
+        visible={requestModal.open}
+        clinicId={requestModal.clinicId}
+        clinicName={requestModal.clinicName}
+        room={requestModal.room}
+        onClose={closeRequest}
+        onSuccess={onRequestSuccess}
+        onError={(msg) => showToast(msg, 'error')}
+      />
+
+      <Toast
+        visible={toast.visible}
+        message={toast.msg}
+        type={toast.type}
+        onHide={() => setToast({ ...toast, visible: false })}
+      />
     </SafeAreaView>
   );
 }
@@ -255,6 +318,10 @@ const styles = StyleSheet.create({
   roomName: { fontSize: 14, fontWeight: '700' },
   roomEq: { fontSize: 12, marginTop: 2 },
   priceText: { fontSize: 15, fontWeight: '800' },
+  requestPill: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 10, height: 28, borderRadius: 999,
+  },
   moreText: { fontSize: 12, marginTop: 4, textAlign: 'center', fontStyle: 'italic' },
   actionsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
   actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 38, borderRadius: 10, borderWidth: 1 },

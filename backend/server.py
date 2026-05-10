@@ -1252,6 +1252,275 @@ async def geocode(q: str):
     return out
 
 # ==========================
+# Room Rental Requests (doctor → studio)
+# ==========================
+RequestStatus = Literal['pending', 'accepted', 'rejected', 'cancelled']
+
+
+class RoomRequestIn(BaseModel):
+    rental_mode: Literal['hourly', 'daily']
+    start_iso: str  # ISO 8601 datetime, e.g. "2026-05-20T09:00:00.000Z"
+    hours: Optional[int] = Field(None, ge=1, le=12)   # required if hourly
+    days: Optional[int] = Field(None, ge=1, le=30)    # required if daily
+    message: Optional[str] = Field(None, max_length=600)
+
+
+class RoomRequestRespond(BaseModel):
+    response_message: Optional[str] = Field(None, max_length=600)
+
+
+def _calc_estimated_price(room: dict, mode: str, hours: Optional[int], days: Optional[int]) -> float:
+    if mode == 'hourly':
+        rate = float(room.get('hourly_price') or 0)
+        return rate * (hours or 1)
+    rate = float(room.get('daily_price') or 0)
+    return rate * (days or 1)
+
+
+def _serialize_request(r: dict) -> dict:
+    """Strip mongo _id and ensure datetimes are ISO strings."""
+    out = {k: v for k, v in r.items() if k != '_id'}
+    for k in ('created_at', 'responded_at', 'cancelled_at'):
+        v = out.get(k)
+        if isinstance(v, datetime):
+            out[k] = v.isoformat()
+    return out
+
+
+@api_router.post("/clinics/{clinic_id}/rooms/{room_id}/request")
+async def create_room_request(
+    clinic_id: str,
+    room_id: str,
+    data: RoomRequestIn,
+    current_user: User = Depends(get_current_user),
+):
+    """A doctor sends a rental request to a studio for a specific room."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo i medici possono inviare richieste.")
+
+    # Validate inputs based on mode
+    if data.rental_mode == 'hourly' and not data.hours:
+        raise HTTPException(400, "Specifica il numero di ore per affitto orario.")
+    if data.rental_mode == 'daily' and not data.days:
+        raise HTTPException(400, "Specifica il numero di giorni per affitto giornaliero.")
+
+    # Validate datetime
+    try:
+        start_dt = datetime.fromisoformat(data.start_iso.replace('Z', '+00:00'))
+    except Exception:
+        raise HTTPException(400, "Formato data/ora non valido.")
+    if start_dt < datetime.now(timezone.utc) - timedelta(minutes=5):
+        raise HTTPException(400, "La data richiesta non può essere nel passato.")
+
+    # Find clinic + room
+    clinic = await db.clinics.find_one({'clinic_id': clinic_id}, {'_id': 0})
+    if not clinic:
+        raise HTTPException(404, "Studio non trovato.")
+    room = next((r for r in clinic.get('rooms', []) if r.get('room_id') == room_id), None)
+    if not room:
+        raise HTTPException(404, "Stanza non trovata.")
+    if not room.get('available', True):
+        raise HTTPException(400, "Questa stanza non è attualmente disponibile.")
+    if data.rental_mode not in (room.get('rental_modes') or []):
+        raise HTTPException(400, "Modalità di affitto non supportata da questa stanza.")
+
+    # Compute end + estimated price
+    if data.rental_mode == 'hourly':
+        end_dt = start_dt + timedelta(hours=data.hours or 1)
+    else:
+        end_dt = start_dt + timedelta(days=data.days or 1)
+    estimated_price = _calc_estimated_price(room, data.rental_mode, data.hours, data.days)
+
+    # Fetch doctor profile (specialties + phone) — best effort, do not block if missing
+    doctor_profile = await db.doctors.find_one({'owner_email': current_user.email}, {'_id': 0})
+    doctor_specialties: List[str] = doctor_profile.get('specialties', []) if doctor_profile else []
+    doctor_photo = doctor_profile.get('photo') if doctor_profile else None
+
+    request_doc = {
+        'request_id': f"req_{uuid.uuid4().hex[:10]}",
+        'clinic_id': clinic['clinic_id'],
+        'clinic_name': clinic.get('name', ''),
+        'clinic_owner_email': clinic.get('owner_email', ''),
+        'room_id': room_id,
+        'room_name': room.get('name', ''),
+        'doctor_user_id': current_user.user_id,
+        'doctor_name': current_user.name or current_user.email.split('@')[0],
+        'doctor_email': current_user.email,
+        'doctor_phone': current_user.phone or '',
+        'doctor_specialties': doctor_specialties,
+        'doctor_photo': doctor_photo,
+        'rental_mode': data.rental_mode,
+        'start_iso': start_dt.astimezone(timezone.utc).isoformat(),
+        'end_iso': end_dt.astimezone(timezone.utc).isoformat(),
+        'hours': data.hours,
+        'days': data.days,
+        'estimated_price': round(estimated_price, 2),
+        'message': (data.message or '').strip() or None,
+        'status': 'pending',
+        'response_message': None,
+        'created_at': datetime.now(timezone.utc),
+        'responded_at': None,
+        'cancelled_at': None,
+    }
+    await db.room_requests.insert_one(request_doc)
+    logger.info(f"[RoomRequest] {current_user.email} → {clinic['clinic_id']}/{room_id} ({data.rental_mode}) €{estimated_price:.2f}")
+    return _serialize_request(request_doc)
+
+
+@api_router.get("/studio/requests")
+async def list_studio_requests(
+    status: Optional[RequestStatus] = None,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+):
+    """Studio owner lists incoming rental requests."""
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    query: dict = {'clinic_owner_email': current_user.email}
+    if status:
+        query['status'] = status
+    docs = await db.room_requests.find(query).sort('created_at', -1).to_list(limit)
+    return [_serialize_request(r) for r in docs]
+
+
+@api_router.get("/studio/stats")
+async def studio_stats(current_user: User = Depends(get_current_user)):
+    """Aggregated stats for the studio dashboard."""
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    clinic = await db.clinics.find_one({'owner_email': current_user.email}, {'_id': 0})
+    rooms = clinic.get('rooms', []) if clinic else []
+    rooms_total = len(rooms)
+    rooms_available_today = sum(1 for r in rooms if r.get('available', True))
+
+    # Pending requests count
+    pending_count = await db.room_requests.count_documents({
+        'clinic_owner_email': current_user.email,
+        'status': 'pending',
+    })
+
+    # Income estimate this month (from accepted requests where start_iso falls in current month)
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if now.month == 12:
+        month_end = month_start.replace(year=now.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=now.month + 1)
+
+    income_pipeline = [
+        {'$match': {
+            'clinic_owner_email': current_user.email,
+            'status': 'accepted',
+            'start_iso': {
+                '$gte': month_start.isoformat(),
+                '$lt': month_end.isoformat(),
+            },
+        }},
+        {'$group': {'_id': None, 'total': {'$sum': '$estimated_price'}, 'count': {'$sum': 1}}},
+    ]
+    income_doc = await db.room_requests.aggregate(income_pipeline).to_list(1)
+    estimated_income_month = float(income_doc[0]['total']) if income_doc else 0.0
+    accepted_count_month = int(income_doc[0]['count']) if income_doc else 0
+
+    # All-time accepted
+    accepted_total = await db.room_requests.count_documents({
+        'clinic_owner_email': current_user.email,
+        'status': 'accepted',
+    })
+
+    return {
+        'rooms_total': rooms_total,
+        'rooms_available_today': rooms_available_today,
+        'requests_pending': pending_count,
+        'estimated_income_month': round(estimated_income_month, 2),
+        'accepted_this_month': accepted_count_month,
+        'accepted_total': accepted_total,
+    }
+
+
+@api_router.patch("/studio/requests/{request_id}/accept")
+async def accept_request(
+    request_id: str,
+    data: RoomRequestRespond = RoomRequestRespond(),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    req = await db.room_requests.find_one({'request_id': request_id, 'clinic_owner_email': current_user.email}, {'_id': 0})
+    if not req:
+        raise HTTPException(404, "Richiesta non trovata.")
+    if req['status'] != 'pending':
+        raise HTTPException(400, f"Impossibile accettare una richiesta in stato '{req['status']}'.")
+    update = {
+        'status': 'accepted',
+        'responded_at': datetime.now(timezone.utc),
+        'response_message': (data.response_message or '').strip() or None,
+    }
+    await db.room_requests.update_one({'request_id': request_id}, {'$set': update})
+    req.update(update)
+    logger.info(f"[RoomRequest] ACCEPTED {request_id} by {current_user.email}")
+    return _serialize_request(req)
+
+
+@api_router.patch("/studio/requests/{request_id}/reject")
+async def reject_request(
+    request_id: str,
+    data: RoomRequestRespond = RoomRequestRespond(),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != 'studio':
+        raise HTTPException(403, "Solo per studi")
+    req = await db.room_requests.find_one({'request_id': request_id, 'clinic_owner_email': current_user.email}, {'_id': 0})
+    if not req:
+        raise HTTPException(404, "Richiesta non trovata.")
+    if req['status'] != 'pending':
+        raise HTTPException(400, f"Impossibile rifiutare una richiesta in stato '{req['status']}'.")
+    update = {
+        'status': 'rejected',
+        'responded_at': datetime.now(timezone.utc),
+        'response_message': (data.response_message or '').strip() or None,
+    }
+    await db.room_requests.update_one({'request_id': request_id}, {'$set': update})
+    req.update(update)
+    logger.info(f"[RoomRequest] REJECTED {request_id} by {current_user.email}")
+    return _serialize_request(req)
+
+
+@api_router.get("/doctor/room-requests")
+async def list_doctor_requests(
+    status: Optional[RequestStatus] = None,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+):
+    """Doctor lists their own sent requests."""
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    query: dict = {'doctor_user_id': current_user.user_id}
+    if status:
+        query['status'] = status
+    docs = await db.room_requests.find(query).sort('created_at', -1).to_list(limit)
+    return [_serialize_request(r) for r in docs]
+
+
+@api_router.patch("/doctor/room-requests/{request_id}/cancel")
+async def cancel_room_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != 'doctor':
+        raise HTTPException(403, "Solo per medici")
+    req = await db.room_requests.find_one({'request_id': request_id, 'doctor_user_id': current_user.user_id}, {'_id': 0})
+    if not req:
+        raise HTTPException(404, "Richiesta non trovata.")
+    if req['status'] != 'pending':
+        raise HTTPException(400, "Solo le richieste in attesa possono essere cancellate.")
+    update = {'status': 'cancelled', 'cancelled_at': datetime.now(timezone.utc)}
+    await db.room_requests.update_one({'request_id': request_id}, {'$set': update})
+    req.update(update)
+    return _serialize_request(req)
+
+
+# ==========================
 # Seed
 # ==========================
 @api_router.post("/seed")
@@ -1485,6 +1754,10 @@ async def startup_event():
     await db.password_resets.create_index("token_hash", unique=True)
     await db.password_resets.create_index("expires_at", expireAfterSeconds=2 * 3600)
     await db.password_resets.create_index([("email", 1), ("created_at", -1)])
+    # Room rental requests
+    await db.room_requests.create_index("request_id", unique=True)
+    await db.room_requests.create_index([("clinic_owner_email", 1), ("status", 1), ("created_at", -1)])
+    await db.room_requests.create_index([("doctor_user_id", 1), ("created_at", -1)])
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
