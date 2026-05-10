@@ -7,9 +7,11 @@ export type User = {
   email: string;
   name: string;
   picture?: string | null;
-  role: 'patient' | 'doctor' | 'studio';
+  role: 'patient' | 'doctor' | 'studio' | 'admin';
   phone?: string | null;
   auth_provider: 'email' | 'google';
+  is_active?: boolean;
+  verified?: boolean;
 };
 
 type AuthCtx = {
@@ -26,6 +28,7 @@ type AuthCtx = {
 /** Route iniziale per un utente in base al suo ruolo. */
 export function routeForUser(user: User | null): string {
   if (!user) return '/auth/login';
+  if (user.role === 'admin') return '/admin/dashboard';
   if (user.role === 'doctor') return '/doctor-dashboard';
   if (user.role === 'studio') return '/studio-dashboard';
   return '/(tabs)/home';

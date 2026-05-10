@@ -48,7 +48,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ==========================
 # Models
 # ==========================
-Role = Literal['patient', 'doctor', 'studio']
+Role = Literal['patient', 'doctor', 'studio', 'admin']
 
 class User(BaseModel):
     user_id: str
@@ -58,6 +58,8 @@ class User(BaseModel):
     role: Role = 'patient'
     phone: Optional[str] = None
     auth_provider: Literal['email', 'google'] = 'email'
+    is_active: bool = True
+    verified: bool = False
     created_at: datetime
 
 class StudioInfoIn(BaseModel):
@@ -203,6 +205,11 @@ async def get_current_user(
     user_doc = await db.users.find_one({'user_id': user_id}, {'_id': 0, 'password_hash': 0})
     if not user_doc:
         raise HTTPException(401, "Utente non trovato")
+    if user_doc.get('is_active') is False:
+        raise HTTPException(403, "Account sospeso. Contatta il supporto.")
+    # Backfill defaults for legacy users
+    user_doc.setdefault('is_active', True)
+    user_doc.setdefault('verified', False)
     return User(**user_doc)
 
 # ==========================
@@ -210,6 +217,9 @@ async def get_current_user(
 # ==========================
 @api_router.post("/auth/register", response_model=AuthOut)
 async def register(data: RegisterIn):
+    # Block admin role from public registration
+    if data.role == 'admin':
+        raise HTTPException(403, "Ruolo non consentito tramite registrazione pubblica.")
     existing = await db.users.find_one({'email': data.email.lower()})
     if existing:
         raise HTTPException(400, "Email già registrata")
@@ -225,6 +235,8 @@ async def register(data: RegisterIn):
         'role': data.role,
         'phone': data.phone,
         'auth_provider': 'email',
+        'is_active': True,
+        'verified': False,
         'created_at': datetime.now(timezone.utc)
     }
     await db.users.insert_one(doc)
@@ -279,9 +291,14 @@ async def login(data: LoginIn):
         raise HTTPException(401, "Credenziali non valide")
     if not verify_password(data.password, user_doc['password_hash']):
         raise HTTPException(401, "Credenziali non valide")
+    if user_doc.get('is_active') is False:
+        raise HTTPException(403, "Account sospeso. Contatta il supporto.")
     token = make_jwt(user_doc['user_id'])
     user_doc.pop('_id', None)
     user_doc.pop('password_hash', None)
+    # Backfill defaults for legacy users created before is_active/verified existed
+    user_doc.setdefault('is_active', True)
+    user_doc.setdefault('verified', False)
     return AuthOut(session_token=token, user=User(**user_doc))
 
 @api_router.post("/auth/google/session")
@@ -1521,6 +1538,292 @@ async def cancel_room_request(
 
 
 # ==========================
+# Admin
+# ==========================
+async def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != 'admin':
+        raise HTTPException(403, "Accesso riservato all'amministratore")
+    return current_user
+
+
+def _user_public(doc: dict) -> dict:
+    """Strip sensitive fields and ensure consistent shape for admin user listings."""
+    out = {k: v for k, v in doc.items() if k not in ('_id', 'password_hash')}
+    out.setdefault('is_active', True)
+    out.setdefault('verified', False)
+    if isinstance(out.get('created_at'), datetime):
+        out['created_at'] = out['created_at'].isoformat()
+    return out
+
+
+@api_router.get("/admin/stats")
+async def admin_stats(_: User = Depends(require_admin)):
+    """Global platform stats for admin dashboard overview."""
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if now.month == 12:
+        month_end = month_start.replace(year=now.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=now.month + 1)
+
+    # User counts (parallelizable but simple)
+    users_total = await db.users.count_documents({})
+    users_patient = await db.users.count_documents({'role': 'patient'})
+    users_doctor = await db.users.count_documents({'role': 'doctor'})
+    users_studio = await db.users.count_documents({'role': 'studio'})
+    users_admin = await db.users.count_documents({'role': 'admin'})
+    users_suspended = await db.users.count_documents({'is_active': False})
+    users_verified_doctors = await db.users.count_documents({'role': 'doctor', 'verified': True})
+
+    # Doctors collection (independent profiles)
+    doctors_collection_total = await db.doctors.count_documents({})
+    clinics_total = await db.clinics.count_documents({})
+
+    # Bookings: today and this month
+    today_iso = today_start.isoformat()
+    tomorrow_iso = tomorrow_start.isoformat()
+    month_start_iso = month_start.isoformat()
+    month_end_iso = month_end.isoformat()
+    bookings_today = await db.bookings.count_documents({
+        'created_at': {'$gte': today_iso, '$lt': tomorrow_iso}
+    })
+    bookings_month = await db.bookings.count_documents({
+        'created_at': {'$gte': month_start_iso, '$lt': month_end_iso}
+    })
+    bookings_total = await db.bookings.count_documents({})
+
+    # Room requests
+    requests_pending = await db.room_requests.count_documents({'status': 'pending'})
+    requests_total = await db.room_requests.count_documents({})
+
+    # Estimated platform revenue (this month from accepted requests)
+    pipeline_revenue = [
+        {'$match': {
+            'status': 'accepted',
+            'start_iso': {'$gte': month_start_iso, '$lt': month_end_iso},
+        }},
+        {'$group': {'_id': None, 'total': {'$sum': '$estimated_price'}}},
+    ]
+    rev_doc = await db.room_requests.aggregate(pipeline_revenue).to_list(1)
+    accepted_volume_month = float(rev_doc[0]['total']) if rev_doc else 0.0
+    # Platform fee estimate (configurable - default 10% on rentals)
+    platform_fee_pct = 10.0
+    platform_revenue_month = round(accepted_volume_month * platform_fee_pct / 100, 2)
+
+    # Reviews
+    reviews_total = await db.reviews.count_documents({})
+
+    return {
+        'users': {
+            'total': users_total,
+            'patient': users_patient,
+            'doctor': users_doctor,
+            'studio': users_studio,
+            'admin': users_admin,
+            'suspended': users_suspended,
+            'verified_doctors': users_verified_doctors,
+        },
+        'doctors_profiles': doctors_collection_total,
+        'clinics': clinics_total,
+        'bookings': {
+            'today': bookings_today,
+            'month': bookings_month,
+            'total': bookings_total,
+        },
+        'room_requests': {
+            'pending': requests_pending,
+            'total': requests_total,
+            'accepted_volume_month': round(accepted_volume_month, 2),
+            'platform_revenue_month': platform_revenue_month,
+            'platform_fee_pct': platform_fee_pct,
+        },
+        'reviews_total': reviews_total,
+        'generated_at': now.isoformat(),
+    }
+
+
+@api_router.get("/admin/users")
+async def admin_list_users(
+    role: Optional[str] = None,
+    q: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    verified: Optional[bool] = None,
+    limit: int = 200,
+    skip: int = 0,
+    _: User = Depends(require_admin),
+):
+    query: dict = {}
+    if role and role in ('patient', 'doctor', 'studio', 'admin'):
+        query['role'] = role
+    if is_active is not None:
+        query['is_active'] = is_active
+    if verified is not None:
+        query['verified'] = verified
+    if q:
+        regex = {'$regex': q.strip(), '$options': 'i'}
+        query['$or'] = [{'email': regex}, {'name': regex}]
+
+    total = await db.users.count_documents(query)
+    docs = await db.users.find(query).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
+    items = [_user_public(d) for d in docs]
+    return {'total': total, 'items': items, 'skip': skip, 'limit': limit}
+
+
+@api_router.get("/admin/users/{user_id}")
+async def admin_get_user(user_id: str, _: User = Depends(require_admin)):
+    user = await db.users.find_one({'user_id': user_id})
+    if not user:
+        raise HTTPException(404, "Utente non trovato.")
+    enriched = _user_public(user)
+    # Enrich with profile data
+    if user.get('role') == 'doctor':
+        prof = await db.doctors.find_one({'owner_email': user.get('email')}, {'_id': 0})
+        enriched['doctor_profile'] = prof
+        enriched['bookings_count'] = await db.bookings.count_documents({'doctor_owner_email': user.get('email')})
+    elif user.get('role') == 'studio':
+        prof = await db.clinics.find_one({'owner_email': user.get('email')}, {'_id': 0})
+        enriched['clinic_profile'] = prof
+        enriched['requests_count'] = await db.room_requests.count_documents({'clinic_owner_email': user.get('email')})
+    elif user.get('role') == 'patient':
+        enriched['bookings_count'] = await db.bookings.count_documents({'patient_email': user.get('email')})
+    return enriched
+
+
+@api_router.patch("/admin/users/{user_id}/verify")
+async def admin_verify_user(user_id: str, _: User = Depends(require_admin)):
+    user = await db.users.find_one({'user_id': user_id})
+    if not user:
+        raise HTTPException(404, "Utente non trovato.")
+    new_value = not bool(user.get('verified', False))
+    await db.users.update_one({'user_id': user_id}, {'$set': {'verified': new_value}})
+    # Mirror on doctor profile if applicable
+    if user.get('role') == 'doctor':
+        await db.doctors.update_one({'owner_email': user.get('email')}, {'$set': {'verified': new_value}})
+    elif user.get('role') == 'studio':
+        await db.clinics.update_one({'owner_email': user.get('email')}, {'$set': {'verified': new_value}})
+    logger.info(f"[Admin] {'VERIFIED' if new_value else 'UNVERIFIED'} user {user_id}")
+    return {'user_id': user_id, 'verified': new_value}
+
+
+@api_router.patch("/admin/users/{user_id}/suspend")
+async def admin_suspend_user(user_id: str, current: User = Depends(require_admin)):
+    user = await db.users.find_one({'user_id': user_id})
+    if not user:
+        raise HTTPException(404, "Utente non trovato.")
+    if user.get('role') == 'admin':
+        raise HTTPException(400, "Non puoi sospendere un altro amministratore.")
+    if user.get('user_id') == current.user_id:
+        raise HTTPException(400, "Non puoi sospendere te stesso.")
+    await db.users.update_one({'user_id': user_id}, {'$set': {'is_active': False}})
+    logger.info(f"[Admin] SUSPENDED user {user_id}")
+    return {'user_id': user_id, 'is_active': False}
+
+
+@api_router.patch("/admin/users/{user_id}/activate")
+async def admin_activate_user(user_id: str, _: User = Depends(require_admin)):
+    user = await db.users.find_one({'user_id': user_id})
+    if not user:
+        raise HTTPException(404, "Utente non trovato.")
+    await db.users.update_one({'user_id': user_id}, {'$set': {'is_active': True}})
+    logger.info(f"[Admin] ACTIVATED user {user_id}")
+    return {'user_id': user_id, 'is_active': True}
+
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, current: User = Depends(require_admin)):
+    user = await db.users.find_one({'user_id': user_id})
+    if not user:
+        raise HTTPException(404, "Utente non trovato.")
+    if user.get('role') == 'admin':
+        raise HTTPException(400, "Non puoi eliminare un altro amministratore.")
+    if user.get('user_id') == current.user_id:
+        raise HTTPException(400, "Non puoi eliminare te stesso.")
+    email = user.get('email')
+    # Cascade delete owned data
+    if user.get('role') == 'doctor':
+        await db.doctors.delete_many({'owner_email': email})
+        await db.bookings.delete_many({'doctor_owner_email': email})
+    elif user.get('role') == 'studio':
+        await db.clinics.delete_many({'owner_email': email})
+        await db.room_requests.delete_many({'clinic_owner_email': email})
+    # Also clean any sent room requests
+    await db.room_requests.delete_many({'doctor_user_id': user_id})
+    # Finally delete user + sessions
+    await db.user_sessions.delete_many({'user_id': user_id})
+    await db.users.delete_one({'user_id': user_id})
+    logger.info(f"[Admin] DELETED user {user_id} ({email})")
+    return {'user_id': user_id, 'deleted': True}
+
+
+@api_router.get("/admin/clinics")
+async def admin_list_clinics(
+    q: Optional[str] = None,
+    limit: int = 200,
+    _: User = Depends(require_admin),
+):
+    query: dict = {}
+    if q:
+        regex = {'$regex': q.strip(), '$options': 'i'}
+        query['$or'] = [{'name': regex}, {'city': regex}, {'owner_email': regex}]
+    docs = await db.clinics.find(query, {'_id': 0}).sort('created_at', -1).to_list(limit)
+    # Enrich with rooms_count and request stats
+    for c in docs:
+        c['rooms_actual'] = len(c.get('rooms', []))
+        c['rooms_available'] = sum(1 for r in c.get('rooms', []) if r.get('available', True))
+        c['requests_pending'] = await db.room_requests.count_documents({
+            'clinic_owner_email': c.get('owner_email'), 'status': 'pending'
+        })
+    return docs
+
+
+@api_router.get("/admin/analytics")
+async def admin_analytics(_: User = Depends(require_admin)):
+    """Top cities and top specialties for the platform."""
+    # Top cities by clinic count
+    pipeline_cities = [
+        {'$match': {'city': {'$ne': ''}}},
+        {'$group': {'_id': '$city', 'clinics': {'$sum': 1}, 'rooms': {'$sum': {'$size': {'$ifNull': ['$rooms', []]}}}}},
+        {'$sort': {'clinics': -1}},
+        {'$limit': 10},
+    ]
+    top_cities = [
+        {'city': d['_id'], 'clinics': d['clinics'], 'rooms': d['rooms']}
+        for d in await db.clinics.aggregate(pipeline_cities).to_list(10)
+    ]
+
+    # Top specialties from doctors collection
+    pipeline_specs = [
+        {'$unwind': '$specialties'},
+        {'$group': {'_id': '$specialties', 'doctors': {'$sum': 1}}},
+        {'$sort': {'doctors': -1}},
+        {'$limit': 10},
+    ]
+    top_specialties = [
+        {'specialty': d['_id'], 'doctors': d['doctors']}
+        for d in await db.doctors.aggregate(pipeline_specs).to_list(10)
+    ]
+
+    # Requests by status (last 30 days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    pipeline_status = [
+        {'$match': {'created_at': {'$gte': cutoff}}},
+        {'$group': {'_id': '$status', 'count': {'$sum': 1}}},
+    ]
+    by_status = {
+        d['_id']: d['count']
+        for d in await db.room_requests.aggregate(pipeline_status).to_list(10)
+    }
+
+    return {
+        'top_cities': top_cities,
+        'top_specialties': top_specialties,
+        'requests_by_status_30d': by_status,
+    }
+
+
+# ==========================
 # Seed
 # ==========================
 @api_router.post("/seed")
@@ -1744,6 +2047,38 @@ async def startup_event():
             logger.info("Auto-seeded doctors data")
         except Exception as e:
             logger.error(f"Seed failed: {e}")
+
+    # Auto-create default admin user (idempotent)
+    admin_email = os.environ.get('DEFAULT_ADMIN_EMAIL', 'admin@vicinomed.it')
+    admin_password = os.environ.get('DEFAULT_ADMIN_PASSWORD', 'Admin2026!')
+    existing_admin = await db.users.find_one({'email': admin_email})
+    if not existing_admin:
+        try:
+            await db.users.insert_one({
+                'user_id': f"user_{uuid.uuid4().hex[:12]}",
+                'email': admin_email,
+                'password_hash': hash_password(admin_password),
+                'name': 'VicinoMed Admin',
+                'picture': None,
+                'role': 'admin',
+                'phone': None,
+                'auth_provider': 'email',
+                'is_active': True,
+                'verified': True,
+                'created_at': datetime.now(timezone.utc),
+            })
+            logger.info(f"[Admin] Default admin created: {admin_email}")
+        except Exception as e:
+            logger.error(f"[Admin] Auto-seed admin failed: {e}")
+    else:
+        # Ensure existing admin has correct role/active flag (recover from manual changes)
+        if existing_admin.get('role') != 'admin' or existing_admin.get('is_active') is False:
+            await db.users.update_one(
+                {'email': admin_email},
+                {'$set': {'role': 'admin', 'is_active': True, 'verified': True}}
+            )
+            logger.info(f"[Admin] Restored admin role for {admin_email}")
+
     # Indexes
     await db.users.create_index("email", unique=True)
     await db.user_sessions.create_index("session_token", unique=True)
@@ -1758,6 +2093,9 @@ async def startup_event():
     await db.room_requests.create_index("request_id", unique=True)
     await db.room_requests.create_index([("clinic_owner_email", 1), ("status", 1), ("created_at", -1)])
     await db.room_requests.create_index([("doctor_user_id", 1), ("created_at", -1)])
+    # Helpful index for admin user listings
+    await db.users.create_index([("role", 1), ("created_at", -1)])
+    await db.users.create_index("is_active")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
